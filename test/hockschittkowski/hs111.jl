@@ -22,7 +22,7 @@
 using JuMP
 using Base.Test
 
-let
+@testset "HS111" begin
 
 c = [-6.089, -17.164, -34.054, -5.914, -24.721, -14.986, -24.100, -10.708, -26.662, -22.179]
 
@@ -30,7 +30,7 @@ m = Model()
 @variable(m, -100 <= x[1:10] <= 100, start = -2.3)
 
 @NLobjective(m, Min,
-    sum{exp(x[j]) * (c[j] + x[j] - log( sum{exp(x[k]), k=1:10} ) ), j=1:10})
+    sum(exp(x[j]) * (c[j] + x[j] - log( sum(exp(x[k]) for k=1:10) ) ) for j=1:10))
 
 @NLconstraint(m, exp(x[1]) + 2*exp(x[2]) + 2*exp(x[3]) +   exp(x[6]) + exp(x[10]) == 2)
 @NLconstraint(m, exp(x[4]) + 2*exp(x[5]) +   exp(x[6]) +   exp(x[7])              == 1)
@@ -38,6 +38,6 @@ m = Model()
 
 solve(m)
 
-@test_approx_eq_eps getobjectivevalue(m) -47.76109026 1e-5
+@test isapprox(getobjectivevalue(m), -47.76109026, atol=1e-5)
 
 end

@@ -21,6 +21,8 @@ type InfoCallback <: JuMPCallback
     when::Symbol
 end
 
+type StopTheSolver end
+
 type CallbackAbort <: Exception end
 export CallbackAbort
 
@@ -73,11 +75,15 @@ function lazycallback(d::MathProgBase.MathProgCallbackData, m::Model, cbs::Vecto
     try
         for cb in cbs
             if state == :MIPSol || cb.fractional
-                cb.f(d)
+                ret = cb.f(d)
+                if ret === StopTheSolver
+                    return :Exit
+                end
             end
         end
     catch y
         if isa(y, CallbackAbort)
+            Base.warn_once("Throwing CallbackAbort() from a callback is deprecated. Use \"return JuMP.StopTheSolver\" instead.")
             return :Exit
         else
             rethrow(y)
@@ -222,9 +228,6 @@ macro lazyconstraint(args...)
         end
     end
 
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     if isexpr(x, :call) && length(x.args) == 3 # simple comparison
         lhs = :($(x.args[2]) - $(x.args[3])) # move everything to the lhs
         newaff, parsecode = parseExprToplevel(lhs, :aff)
@@ -291,9 +294,6 @@ macro usercut(args...)
     end
 
     #cbdata = esc(cbdata)
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     if isexpr(x, :call) && length(x.args) == 3 # simple comparison
         lhs = :($(x.args[2]) - $(x.args[3])) # move everything to the lhs
         newaff, parsecode = parseExprToplevel(lhs, :aff)

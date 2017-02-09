@@ -11,7 +11,7 @@ This guide will briefly guide you through installing Julia, JuMP and[a] solver[s
 Getting Julia
 ^^^^^^^^^^^^^
 
-At the time of writing this documentation the latest release of Julia is version ``0.4``, which is the version required by JuMP. You can easily build from source on OS X and Linux, but the binaries will work well for most people.
+At the time of writing this documentation the latest release of Julia is version ``0.5``, which is the version required by JuMP. You can easily build from source on OS X and Linux, but the binaries will work well for most people.
 
 Download links and more detailed instructions are available on the `Julia website <http://julialang.org>`_.
 
@@ -42,6 +42,8 @@ Solver support in Julia is currently provided by writing a solver-specific packa
 +==================================================================================+=================================================================================+=============================+=============+====+======+======+=====+=======+=====+
 | `Artelys Knitro <http://artelys.com/en/optimization-tools/knitro>`_              | `KNITRO.jl <https://github.com/JuliaOpt/KNITRO.jl>`_                            | ``KnitroSolver()``          |  Comm.      |    |      |      |  X  |   X   |     |
 +----------------------------------------------------------------------------------+---------------------------------------------------------------------------------+-----------------------------+-------------+----+------+------+-----+-------+-----+
+| `BARON <http://archimedes.cheme.cmu.edu/?q=baron>`_                              | `BARON.jl <https://github.com/joehuchette/BARON.jl>`_                           |  ``BaronSolver()``          |  Comm.      |    |      |      |  X  |   X   |     |
++----------------------------------------------------------------------------------+---------------------------------------------------------------------------------+-----------------------------+-------------+----+------+------+-----+-------+-----+
 | `Bonmin <https://projects.coin-or.org/Bonmin>`_                                  | `AmplNLWriter.jl <https://github.com/JackDunnNZ/AmplNLWriter.jl>`_              | ``BonminNLSolver()`` *      |  EPL        | X  |      |  X   |  X  |   X   |     |
 +                                                                                  +---------------------------------------------------------------------------------+-----------------------------+             +    +      +      +     +       +     +
 |                                                                                  | `CoinOptServices.jl <https://github.com/JuliaOpt/CoinOptServices.jl>`_          | ``OsilBonminSolver()``      |             |    |      |      |     |       |     |
@@ -58,7 +60,7 @@ Solver support in Julia is currently provided by writing a solver-specific packa
 +----------------------------------------------------------------------------------+---------------------------------------------------------------------------------+-----------------------------+-------------+----+------+------+-----+-------+-----+
 | `ECOS <https://github.com/ifa-ethz/ecos>`_                                       | `ECOS.jl <https://github.com/JuliaOpt/ECOS.jl>`_                                |  ``ECOSSolver()``           |  GPL        | X  |  X   |      |     |       |     |
 +----------------------------------------------------------------------------------+---------------------------------------------------------------------------------+-----------------------------+-------------+----+------+------+-----+-------+-----+
-| `FICO Xpress <http://www.fico.com/en/products/fico-xpress-optimization-suite>`_  | `Xpress.jl <https://github.com/JuliaOpt/Xpress.jl>`_                            |  ``XpressSolver()``         |  Comm.      | X  |      |  X   |     |       |     |
+| `FICO Xpress <http://www.fico.com/en/products/fico-xpress-optimization-suite>`_  | `Xpress.jl <https://github.com/JuliaOpt/Xpress.jl>`_                            |  ``XpressSolver()``         |  Comm.      | X  |   X  |  X   |     |       |     |
 +----------------------------------------------------------------------------------+---------------------------------------------------------------------------------+-----------------------------+-------------+----+------+------+-----+-------+-----+
 | `GLPK <http://www.gnu.org/software/glpk/>`_                                      | `GLPKMath... <https://github.com/JuliaOpt/GLPKMathProgInterface.jl>`_           |  ``GLPKSolver[LP|MIP]()``   |  GPL        | X  |      |  X   |     |       |     |
 +----------------------------------------------------------------------------------+---------------------------------------------------------------------------------+-----------------------------+-------------+----+------+------+-----+-------+-----+
@@ -100,6 +102,11 @@ Artelys Knitro
 
 Requires a license. The KNITRO.jl interface currently supports only nonlinear problems.
 
+BARON
++++++
+
+Requires a license. A trial version is available for small problem instances.
+
 COIN-OR Clp and Cbc
 +++++++++++++++++++
 
@@ -122,7 +129,10 @@ ECOS can be used by JuMP to solve LPs and SOCPs. ECOS does not support general q
 FICO Xpress
 +++++++++++
 
-Requires a license. The interface is experimental and has not been widely tested. Callbacks are not yet supported. SOCPs have not been tested.
+Requires a working installation of Xpress with an active license (it is possible to get license for academic use, see `FICO Academic Partner Program <http://subscribe.fico.com/Academic-Partner-Program>`_). Supports SOCP and "SOS" constraints. The interface is experimental, but it does pass all JuMP and MathProgBase tests. Callbacks are not yet supported.
+
+.. warning::
+   If you are using 64-bit Xpress, you must use 64-bit Julia (and similarly with 32-bit Xpress).
 
 GLPK
 ++++

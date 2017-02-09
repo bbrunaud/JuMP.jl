@@ -8,20 +8,61 @@ using Base.Meta
 issum(s::Symbol) = (s == :sum) || (s == :∑) || (s == :Σ)
 isprod(s::Symbol) = (s == :prod) || (s == :∏)
 
-# for backward compatibility with 0.4
-function comparison_to_call(ex)
-    if isexpr(ex,:comparison) && length(ex.args) == 3
-        return Expr(:call,ex.args[2],ex.args[1],ex.args[3])
+function curly_to_generator(x)
+    # we have a filter condition
+    x = copy(x)
+    @assert isexpr(x,:curly)
+    if isexpr(x.args[2],:parameters)
+        cond = x.args[2].args[1]
+        body = x.args[3]
+        if length(x.args) == 3 # no iteration set!
+            push!(x.args,:(_ in 1))
+        end
+        for i in length(x.args):-1:4
+            if i == length(x.args)
+                body = Expr(:generator,body,Expr(:filter,cond,x.args[i]))
+            else
+                body = Expr(:generator,body,x.args[i])
+            end
+        end
     else
-        return ex
+        cond = nothing
+        body = x.args[2]
+        if length(x.args) == 2 # no iteration set!
+            push!(x.args,:(_ in 1))
+        end
+        for i in length(x.args):-1:3
+            body = Expr(:generator,body,x.args[i])
+        end
+    end
+    if isexpr(body.args[1],:generator)
+        body = Expr(:flatten,body)
+    end
+    name = x.args[1]
+    if name == :norm2
+        return Expr(:call,:norm,body)
+    elseif name == :norm1
+        return Expr(:call,:norm,body,1)
+    elseif name == :norminf
+        return Expr(:call,:norm,body,Inf)
+    elseif name == :norm∞
+        return Expr(:call,:norm,body,Inf)
+    else
+        return Expr(:call,name,body)
     end
 end
 
-function flatten_error(ex)
-    isexpr(ex, :flatten) || return
-    error("The generator syntax \"$ex\" with multiple \"for\" statements is not yet supported. For JuMP, you should contract statements like \"for i in 1:N for j in 1:i\" into \"for i in 1:N, j in 1:i\"")
+function warn_curly(x)
+    genform = curly_to_generator(x)
+    if length(genform.args) == 2
+        # don't print extra parens
+        genstr = "$(genform.args[1])$(genform.args[2])"
+    else
+        genstr = "$genform"
+    end
+    Base.warn_once("The curly syntax (sum{},prod{},norm2{}) is deprecated in favor of the new generator syntax (sum(),prod(),norm()).")
+    Base.warn_once("Replace $x with $genstr.")
 end
-
 
 include("parseExpr_staged.jl")
 
@@ -303,8 +344,9 @@ macro constraint(args...)
     else
         kwargs = Expr(:parameters)
     end
-    append!(kwargs.args, collect(filter(x -> isexpr(x, :kw), args))) # comma separated
-    args = collect(filter(x->!isexpr(x, :kw), args))
+    kwsymbol = VERSION < v"0.6.0-dev" ? :kw : :(=)
+    append!(kwargs.args, collect(filter(x -> isexpr(x, kwsymbol), args))) # comma separated
+    args = collect(filter(x->!isexpr(x, kwsymbol), args))
 
     if length(args) < 2
         if length(kwargs.args) > 0
@@ -326,7 +368,7 @@ macro constraint(args...)
     c = length(extra) == 1 ? x        : gensym()
     x = length(extra) == 1 ? extra[1] : x
 
-    anonvar = isexpr(c, :vect) || isexpr(c, :vcat)
+    anonvar = isexpr(c, :vect) || isexpr(c, :vcat) || length(extra) != 1
     variable = gensym()
     quotvarname = quot(getname(c))
     escvarname  = anonvar ? variable : esc(getname(c))
@@ -337,9 +379,6 @@ macro constraint(args...)
 
     (x.head == :block) &&
         constraint_error(args, "Code block passed as constraint. Perhaps you meant to use @constraints instead?")
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
 
     # Strategy: build up the code for non-macro addconstraint, and if needed
     # we will wrap in loops to assign to the ConstraintRefs
@@ -354,8 +393,8 @@ macro constraint(args...)
         newaff, parsecode = parseExprToplevel(lhs, :q)
         constraintcall = :($addconstr($m, constructconstraint!($newaff,$(quot(sense)))))
         for kw in kwargs.args
-            @assert isexpr(kw, :kw)
-            push!(constraintcall.args, esc(kw))
+            @assert isexpr(kw, kwsymbol)
+            push!(constraintcall.args, esc(Expr(:kw,kw.args...)))
         end
         code = quote
             q = zero(AffExpr)
@@ -404,12 +443,12 @@ macro constraint(args...)
                 try
                     lbval = convert(CoefType, $newlb)
                 catch
-                    constraint_error(args, string("Expected ",$lb_str," to be a ", CoefType, "."))
+                    constraint_error($args, string("Expected ",$lb_str," to be a ", CoefType, "."))
                 end
                 try
                     ubval = convert(CoefType, $newub)
                 catch
-                    constraint_error(args, string("Expected ",$ub_str," to be a ", CoefType, "."))
+                    constraint_error($args, string("Expected ",$ub_str," to be a ", CoefType, "."))
                 end
             end
         end
@@ -425,8 +464,14 @@ macro constraint(args...)
     end
     return assert_validmodel(m, quote
         $(getloopedcode(variable, code, condition, idxvars, idxsets, idxpairs, :ConstraintRef))
-        registercon($m, $quotvarname, $variable)
-        $(anonvar ? variable : :($escvarname = $variable))
+        $(if anonvar
+            variable
+        else
+            quote
+                registercon($m, $quotvarname, $variable)
+                $escvarname = $variable
+            end
+        end)
     end)
 end
 
@@ -434,14 +479,11 @@ macro SDconstraint(m, x)
     m = esc(m)
 
     if isa(x, Symbol)
-        error("in @SDConstraint: Incomplete constraint specification $x. Are you missing a comparison (<= or >=)?")
+        error("in @SDconstraint: Incomplete constraint specification $x. Are you missing a comparison (<= or >=)?")
     end
 
     (x.head == :block) &&
         error("Code block passed as constraint.")
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     isexpr(x,:call) && length(x.args) == 3 || error("in @SDconstraint ($(string(x))): constraints must be in one of the following forms:\n" *
               "       expr1 <= expr2\n" * "       expr1 >= expr2")
     # Build the constraint
@@ -465,9 +507,7 @@ macro SDconstraint(m, x)
     assert_validmodel(m, quote
         q = zero(AffExpr)
         $parsecode
-        c = SDConstraint($newaff)
-        push!($(m).sdpconstr, c)
-        c
+        addconstraint($m, SDConstraint($newaff))
     end)
 end
 
@@ -475,9 +515,6 @@ macro LinearConstraint(x)
     (x.head == :block) &&
         error("Code block passed as constraint. Perhaps you meant to use @LinearConstraints instead?")
 
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     if isexpr(x, :call) && length(x.args) == 3
         (sense,vectorized) = _canonicalize_sense(x.args[1])
         # Simple comparison - move everything to the LHS
@@ -526,9 +563,6 @@ macro QuadConstraint(x)
     (x.head == :block) &&
         error("Code block passed as constraint. Perhaps you meant to use @QuadConstraints instead?")
 
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     if isexpr(x, :call) && length(x.args) == 3
         (sense,vectorized) = _canonicalize_sense(x.args[1])
         # Simple comparison - move everything to the LHS
@@ -555,9 +589,6 @@ macro SOCConstraint(x)
     (x.head == :block) &&
         error("Code block passed as constraint. Perhaps you meant to use @SOCConstraints instead?")
 
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     if isexpr(x, :call) && length(x.args) == 3
         (sense,vectorized) = _canonicalize_sense(x.args[1])
         # Simple comparison - move everything to the LHS
@@ -590,7 +621,7 @@ for (mac,sym) in [(:LinearConstraints, Symbol("@LinearConstraint")),
             for it in x.args
                 if it.head == :line
                     # do nothing
-                elseif it.head == :comparison # regular constraint
+                elseif it.head == :comparison || (it.head == :call && it.args[1] in (:<=,:≤,:>=,:≥,:(==))) # regular constraint
                     push!(code.args, Expr(:macrocall, $sym, esc(it)))
                 elseif it.head == :tuple # constraint ref
                     if all([isexpr(arg,:comparison) for arg in it.args]...)
@@ -636,7 +667,7 @@ for (mac,sym) in [(:constraints,  Symbol("@constraint")),
                     end
                     args_esc = []
                     for ex in args
-                        if isexpr(ex, :(=))
+                        if isexpr(ex, :(=)) && VERSION < v"0.6.0-dev"
                             push!(args_esc,Expr(:kw, ex.args[1], esc(ex.args[2])))
                         else
                             push!(args_esc, esc(ex))
@@ -691,18 +722,12 @@ macro expression(args...)
         m = esc(args[1])
         c = args[2]
         x = args[3]
-    elseif length(args) == 1
-        m = nothing
-        c = gensym()
-        x = args[1]
-        Base.warn_once("The one-argument version of @defExpr is deprecated. The corresponding JuMP model is now required as the first argument, and a name for the expression or collection of expressions is required as the second argument. The new syntax is @expression(<JuMP model>, <name of expression(s)>, <expression>)")
     elseif length(args) == 2
-        m = nothing
-        c = args[1]
+        m = esc(args[1])
+        c = gensym()
         x = args[2]
-        Base.warn_once("The two-argument version of @defExpr is deprecated. The corresponding JuMP model is now required as the first argument. The new syntax is @expression(<JuMP model>, <name of expression(s)>, <expression>)")
     else
-        error("@expression: needs three arguments.")
+        error("@expression: needs at least two arguments.")
     end
 
     anonvar = isexpr(c, :vect) || isexpr(c, :vcat)
@@ -770,28 +795,41 @@ function isdependent(idxvars,idxset,i)
 end
 
 esc_nonconstant(x::Number) = x
+esc_nonconstant(x::Expr) = isexpr(x,:quote) ? x : esc(x)
 esc_nonconstant(x) = esc(x)
 
-const EMPTYSTRING = UTF8String("")
+const EMPTYSTRING = ""
 
 variable_error(args, str) = error("In @variable($(join(args,","))): ", str)
 
 macro variable(args...)
-    length(args) <= 1 &&
-        variable_error(args, "Expected model as first argument, then variable information.")
     m = esc(args[1])
-    x = args[2]
-    extra = vcat(args[3:end]...)
 
-    t = :Cont
+    extra = vcat(args[2:end]...)
+    # separate out keyword arguments
+    kwsymbol = VERSION < v"0.6.0-dev" ? :kw : :(=)
+    kwargs = filter(ex->isexpr(ex,kwsymbol), extra)
+    extra = filter(ex->!isexpr(ex,kwsymbol), extra)
+
+    # if there is only a single non-keyword argument, this is an anonymous
+    # variable spec and the one non-kwarg is the model
+    if length(kwargs) == length(args)-1
+        x = gensym()
+        anon_singleton = true
+    else
+        x = shift!(extra)
+        if x in [:Cont,:Int,:Bin,:SemiCont,:SemiInt,:SDP]
+            variable_error(args, "Ambiguous variable name $x detected. Use the \"category\" keyword argument to specify a category for an anonymous variable.")
+        end
+        anon_singleton = false
+    end
+
+    t = quot(:Cont)
     gottype = false
     haslb = false
     hasub = false
     # Identify the variable bounds. Five (legal) possibilities are "x >= lb",
     # "x <= ub", "lb <= x <= ub", "x == val", or just plain "x"
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
     explicit_comparison = false
     if isexpr(x,:comparison) # two-sided
         explicit_comparison = true
@@ -840,7 +878,7 @@ macro variable(args...)
             ub = esc(x.args[3])
             hasub = true
             gottype = true
-            t = :Fixed
+            t = quot(:Fixed)
         else
             # Its a comparsion, but not using <= ... <=
             variable_error(args, "Unexpected syntax $(string(x)).")
@@ -853,15 +891,15 @@ macro variable(args...)
         ub = Inf
     end
 
-    # separate out keyword arguments
-    kwargs = filter(ex->isexpr(ex,:kw), extra)
-    extra = filter(ex->!isexpr(ex,:kw), extra)
-
-    anonvar = isexpr(var, :vect) || isexpr(var, :vcat)
+    anonvar = isexpr(var, :vect) || isexpr(var, :vcat) || anon_singleton
     anonvar && explicit_comparison && error("Cannot use explicit bounds via >=, <= with an anonymous variable")
     variable = gensym()
     quotvarname = anonvar ? :(:__anon__) : quot(getname(var))
     escvarname  = anonvar ? variable     : esc(getname(var))
+
+    if !isa(getname(var),Symbol) && !anonvar
+        Base.warn_once("Expression $(getname(var)) should not be used as a variable name. Use the \"anonymous\" syntax $(getname(var)) = @variable(m, ...) instead.")
+    end
 
     # process keyword arguments
     value = NaN
@@ -888,6 +926,10 @@ macro variable(args...)
             hasub && variable_error(args, "Cannot specify variable upperbound twice")
             ub = esc_nonconstant(ex.args[2])
             hasub = true
+        elseif kwarg == :category
+            (t == quot(:Fixed)) && variable_error(args, "Unexpected extra arguments when declaring a fixed variable")
+            t = esc_nonconstant(ex.args[2])
+            gottype = true
         else
             variable_error(args, "Unrecognized keyword argument $kwarg")
         end
@@ -905,15 +947,13 @@ macro variable(args...)
     # Determine variable type (if present).
     # Types: default is continuous (reals)
     if length(extra) > 0
-        if t == :Fixed
-            variable_error(args, "Unexpected extra arguments when declaring a fixed variable")
-        end
+        gottype && variable_error(args, "Variable category specified more than once")
         if extra[1] in [:Bin, :Int, :SemiCont, :SemiInt]
             gottype = true
-            t = extra[1]
+            t = quot(extra[1])
         end
 
-        if t == :Bin
+        if t == quot(:Bin)
             if (lb != -Inf || ub != Inf) && !(lb == 0.0 && ub == 1.0)
             variable_error(args, "Bounds other than [0, 1] may not be specified for binary variables.\nThese are always taken to have a lower bound of 0 and upper bound of 1.")
             else
@@ -931,7 +971,7 @@ macro variable(args...)
         variable_error(args, "Can only create one variable at a time when adding to existing constraints.")
 
         return assert_validmodel(m, quote
-            $variable = Variable($m,$lb,$ub,$(quot(t)),$obj,$inconstraints,$coefficients,UTF8String(string($quotvarname)),$value)
+            $variable = Variable($m,$lb,$ub,$t,$obj,$inconstraints,$coefficients,string($quotvarname),$value)
             $(anonvar ? variable : :($escvarname = $variable))
         end)
     end
@@ -939,12 +979,15 @@ macro variable(args...)
     if isa(var,Symbol)
         # Easy case - a single variable
         sdp && variable_error(args, "Cannot add a semidefinite scalar variable")
-        @assert !anonvar
-        return assert_validmodel(m, quote
-            $variable = Variable($m,$lb,$ub,$(quot(t)),UTF8String(string($quotvarname)),$value)
-            registervar($m, $quotvarname, $variable)
-            $escvarname = $variable
-        end)
+        code = :($variable = Variable($m,$lb,$ub,$t,string($quotvarname),$value))
+        if !anonvar
+            code = quote
+                $code
+                registervar($m, $quotvarname, $variable)
+                $escvarname = $variable
+            end
+        end
+        return assert_validmodel(m, code)
     end
     isa(var,Expr) || variable_error(args, "Expected $var to be a variable name")
 
@@ -953,7 +996,7 @@ macro variable(args...)
     refcall, idxvars, idxsets, idxpairs, condition = buildrefsets(var, variable)
     clear_dependencies(i) = (isdependent(idxvars,idxsets[i],i) ? () : idxsets[i])
 
-    code = :( $(refcall) = Variable($m, $lb, $ub, $(quot(t)), EMPTYSTRING, $value) )
+    code = :( $(refcall) = Variable($m, $lb, $ub, $t, EMPTYSTRING, $value) )
     if symmetric
         # Sanity checks on SDP input stuff
         condition == :() ||
@@ -977,7 +1020,7 @@ macro variable(args...)
         end
         return assert_validmodel(m, quote
             $(esc(idxsets[1].args[1].args[2])) == $(esc(idxsets[2].args[1].args[2])) || error("Cannot construct symmetric variables with nonsquare dimensions")
-            (Compat.issymmetric($lb) && Compat.issymmetric($ub)) || error("Bounds on symmetric  variables must be symmetric")
+            (issymmetric($lb) && issymmetric($ub)) || error("Bounds on symmetric  variables must be symmetric")
             $(getloopedcode(variable, code, condition, idxvars, idxsets, idxpairs, :Variable; lowertri=symmetric))
             $(if sdp
                 quote
@@ -985,7 +1028,7 @@ macro variable(args...)
                 end
             end)
             push!($(m).dictList, $variable)
-            registervar($m, $quotvarname, $variable)
+            !$anonvar && registervar($m, $quotvarname, $variable)
             storecontainerdata($m, $variable, $quotvarname,
                                $(Expr(:tuple,idxsets...)),
                                $idxpairs, $(quot(condition)))
@@ -998,7 +1041,7 @@ macro variable(args...)
             $(getloopedcode(variable, code, condition, idxvars, idxsets, idxpairs, :Variable))
             isa($variable, JuMPContainer) && pushmeta!($variable, :model, $m)
             push!($(m).dictList, $variable)
-            registervar($m, $quotvarname, $variable)
+            !$anonvar && registervar($m, $quotvarname, $variable)
             storecontainerdata($m, $variable, $quotvarname,
                                $(Expr(:tuple,map(clear_dependencies,1:length(idxsets))...)),
                                $idxpairs, $(quot(condition)))
@@ -1057,14 +1100,10 @@ macro NLconstraint(m, x, extra...)
     c = length(extra) == 1 ? x        : gensym()
     x = length(extra) == 1 ? extra[1] : x
 
-    anonvar = isexpr(c, :vect) || isexpr(c, :vcat)
+    anonvar = isexpr(c, :vect) || isexpr(c, :vcat) || length(extra) != 1
     variable = gensym()
     quotvarname = anonvar ? :(:__anon__) : quot(getname(c))
     escvarname  = anonvar ? variable : esc(getname(c))
-
-    if VERSION < v"0.5.0-dev+3231"
-        x = comparison_to_call(x)
-    end
 
     # Strategy: build up the code for non-macro addconstraint, and if needed
     # we will wrap in loops to assign to the ConstraintRefs
@@ -1119,43 +1158,29 @@ macro NLconstraint(m, x, extra...)
         initNLP($m)
         $m.internalModelLoaded = false
         $looped
-        registercon($m, $quotvarname, $variable)
-        $(anonvar ? variable : :($escvarname = $variable))
+        $(if anonvar
+            variable
+        else
+            quote
+                registercon($m, $quotvarname, $variable)
+                $escvarname = $variable
+            end
+        end)
     end)
 end
 
 macro NLexpression(args...)
-    if length(args) <= 2
-        s = IOBuffer()
-        print(s,args[1])
-        if length(args) == 2
-            print(s,",")
-            print(s,args[2])
-        end
-        msg = """
-        in @NLexpression($(takebuf_string(s))): three arguments are required.
-        Note that the syntax of @NLexpression has recently changed:
-        The first argument should be the model to which the expression is attached.
-        The second is the name of the expression (or collection of expressions).
-        The third is the expression itself.
-        Example:
-        @NLexpression(m, my_expr, x^2/y)
-        @NLexpression(m, my_expr_collection[i=1:2], sin(z[i])^2)
-        Support for the old syntax (with the model omitted) will be removed in an upcoming release.
-        """
-        Base.warn(msg)
-        m = :(__last_model[1])
-        if length(args) == 2
-            c = args[1]
-            x = args[2]
-        else
-            c = gensym()
-            x = args[1]
-        end
-    else
-        @assert length(args) == 3
+    if length(args) <= 1
+        error("in @NLexpression: To few arguments ($(length(args))); must pass the model and nonlinear expression as arguments.")
+    elseif length(args) == 2
+        m, x = args
+        m = esc(m)
+        c = gensym()
+    elseif length(args) == 3
         m, c, x = args
         m = esc(m)
+    else
+        error("in @NLexpression: To many arguments ($(length(args))).")
     end
 
     anonvar = isexpr(c, :vect) || isexpr(c, :vcat)
@@ -1175,9 +1200,6 @@ end
 # syntax is @NLparameter(m, p[i=1] == 2i)
 macro NLparameter(m, ex)
     m = esc(m)
-    if VERSION < v"0.5.0-dev+3231"
-        ex = comparison_to_call(ex)
-    end
     @assert isexpr(ex, :call)
     @assert length(ex.args) == 3
     @assert ex.args[1] == :(==)

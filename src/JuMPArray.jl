@@ -3,7 +3,7 @@
 #  License, v. 2.0. If a copy of the MPL was not distributed with this
 #  file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-immutable JuMPArray{T,N,NT<:NTuple} <: JuMPContainer{T}
+immutable JuMPArray{T,N,NT<:NTuple} <: JuMPContainer{T,N}
     innerArray::Array{T,N}
     indexsets::NT
     lookup::NTuple{N,Dict}
@@ -35,6 +35,7 @@ end
 end
 
 Base.getindex(d::JuMPArray, ::Colon) = d.innerArray[:]
+
 @generated function Base.getindex{T,N,NT<:NTuple}(d::JuMPArray{T,N,NT}, idx...)
     if N != length(idx)
         error("Indexed into a JuMPArray with $(length(idx)) indices (expected $N indices)")
@@ -42,7 +43,7 @@ Base.getindex(d::JuMPArray, ::Colon) = d.innerArray[:]
     Expr(:call, :getindex, :(d.innerArray), _to_cartesian(d,NT,idx)...)
 end
 
-@generated function Base.setindex!{T,N,NT<:NTuple}(d::JuMPArray{T,N,NT}, v::T, idx...)
+@generated function Base.setindex!{T,N,NT<:NTuple}(d::JuMPArray{T,N,NT}, v, idx...)
     if N != length(idx)
         error("Indexed into a JuMPArray with $(length(idx)) indices (expected $N indices)")
     end

@@ -3,8 +3,8 @@ JuMP
 
 JuMP is a domain-specific modeling language for **[mathematical optimization]**
 embedded in **[Julia]**. It currently supports a number of open-source and
-commercial solvers ([Bonmin], [Cbc], [Clp], [Couenne], [CPLEX], [ECOS], [GLPK],
-[Gurobi], [Ipopt], [KNITRO], [MOSEK], [NLopt], [SCS]) for a variety of problem classes, including
+commercial solvers ([Bonmin], [Cbc], [Clp], [Couenne], [CPLEX], [ECOS], [FICO Xpress], [GLPK],
+[Gurobi], [Ipopt], [KNITRO], [MOSEK], [NLopt], [SCS], [BARON]) for a variety of problem classes, including
 **[linear programming]**, **[(mixed) integer programming]**,
 **[second-order conic programming]**, **[semidefinite programming]**, and **[nonlinear programming]**.
 
@@ -15,6 +15,7 @@ commercial solvers ([Bonmin], [Cbc], [Clp], [Couenne], [CPLEX], [ECOS], [GLPK],
 [Clp]: https://projects.coin-or.org/Clp
 [Cbc]: https://projects.coin-or.org/Cbc
 [ECOS]: https://github.com/ifa-ethz/ecos
+[FICO Xpress]: http://www.fico.com/en/products/fico-xpress-optimization-suite
 [GLPK]: http://www.gnu.org/software/glpk/
 [Gurobi]: http://www.gurobi.com/
 [MOSEK]: http://mosek.com/
@@ -23,6 +24,7 @@ commercial solvers ([Bonmin], [Cbc], [Clp], [Couenne], [CPLEX], [ECOS], [GLPK],
 [KNITRO]: http://www.ziena.com/knitro.htm
 [NLopt]: http://ab-initio.mit.edu/wiki/index.php/NLopt
 [SCS]: https://github.com/cvxgrp/scs
+[BARON]: http://archimedes.cheme.cmu.edu/?q=baron
 [linear programming]: http://en.wikipedia.org/wiki/Linear_programming
 [(mixed) integer programming]: http://en.wikipedia.org/wiki/Integer_programming
 [second-order conic programming]: http://en.wikipedia.org/wiki/Second-order_cone_programming
@@ -35,11 +37,17 @@ Our documentation includes an installation guide, quick-start guide, and referen
 
 [juliaopt-notebooks]: https://github.com/JuliaOpt/juliaopt-notebooks
 
+<<<<<<< HEAD
 **Latest Release**: 0.14.1 (via ``Pkg.add``)
   * [Documentation](http://www.juliaopt.org/JuMP.jl/0.14/)
   * [Examples](https://github.com/JuliaOpt/JuMP.jl/tree/release-0.14/examples)
+=======
+**Latest Release**: 0.15.1 (via ``Pkg.add``)
+  * [Documentation](http://www.juliaopt.org/JuMP.jl/0.15/)
+  * [Examples](https://github.com/JuliaOpt/JuMP.jl/tree/release-0.15/examples)
+>>>>>>> 9bef25fe7b64492fc0343f5bd3737d02a92cef24
   * Testing status:
-    * TravisCI: [![Build Status](https://travis-ci.org/JuliaOpt/JuMP.jl.svg?branch=release-0.14)](https://travis-ci.org/JuliaOpt/JuMP.jl)
+    * TravisCI: [![Build Status](https://travis-ci.org/JuliaOpt/JuMP.jl.svg?branch=release-0.15)](https://travis-ci.org/JuliaOpt/JuMP.jl)
     * PackageEvaluator:
       [![JuMP](http://pkg.julialang.org/badges/JuMP_0.4.svg)](http://pkg.julialang.org/?pkg=JuMP&ver=0.4)
       [![JuMP](http://pkg.julialang.org/badges/JuMP_0.5.svg)](http://pkg.julialang.org/?pkg=JuMP&ver=0.5)
@@ -54,6 +62,7 @@ Our documentation includes an installation guide, quick-start guide, and referen
       [![Coverage Status](https://coveralls.io/repos/JuliaOpt/JuMP.jl/badge.svg?branch=master)](https://coveralls.io/r/JuliaOpt/JuMP.jl?branch=master)
       [![codecov](https://codecov.io/gh/JuliaOpt/JuMP.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/JuliaOpt/JuMP.jl)
   * Changes: see [NEWS](https://github.com/JuliaOpt/JuMP.jl/tree/master/NEWS.md)
+  * [Developer chatroom](https://gitter.im/JuliaOpt/JuMP-dev)
 
 
 ## Installation
@@ -96,10 +105,10 @@ We list below what is currently supported. See the documentation for more inform
 
 ## Bug reports and support
 
-Please report any issues via the Github **[issue tracker]**. All types of issues are welcome and encouraged; this includes bug reports, documentation typos, feature requests, etc. The **[julia-opt]** mailing list is appropriate for general discussion, including "how do I do this?" questions.
+Please report any issues via the Github **[issue tracker]**. All types of issues are welcome and encouraged; this includes bug reports, documentation typos, feature requests, etc. The **[Optimization (Mathematical)]** category on Discourse is appropriate for general discussion, including "how do I do this?" questions.
 
 [issue tracker]: https://github.com/JuliaOpt/JuMP.jl/issues
-[julia-opt]: https://groups.google.com/forum/#!forum/julia-opt
+[Optimization (Mathematical)]: https://discourse.julialang.org/c/domain/opt
 
 
 ## Citing JuMP

@@ -14,8 +14,8 @@ performance.
 
 
 Nonlinear objectives and constraints are specified by using the ``@NLobjective``
-and ``@NLconstraint`` macros. The familiar ``sum{}`` syntax is supported within
-these macros, as well as ``prod{}`` which analogously represents the product of
+and ``@NLconstraint`` macros. The familiar ``sum()`` syntax is supported within
+these macros, as well as ``prod()`` which analogously represents the product of
 the terms within. Note that the ``@objective`` and ``@constraint``
 macros (and corresponding functions) do *not* currently support nonlinear expressions.
 However, a model can contain a mix of linear, quadratic, and nonlinear constraints or
@@ -53,7 +53,7 @@ the syntax for linear and quadratic expressions. We note some important points b
 
 - All expressions must be simple scalar operations. You cannot use ``dot``,
   matrix-vector products, vector slices, etc. Translate vector operations
-  into explicit ``sum{}`` operations or use the ``AffExpr`` plus auxiliary variable
+  into explicit ``sum()`` operations or use the ``AffExpr`` plus auxiliary variable
   trick described below.
 - There is no operator overloading provided to build up nonlinear expressions.
   For example, if ``x`` is a JuMP variable, the code ``3x`` will return an
@@ -61,12 +61,13 @@ the syntax for linear and quadratic expressions. We note some important points b
   linear constraints.
   However, the code ``sin(x)`` is an error. All nonlinear expressions must
   be inside of macros.
-- As a corollary, user-defined functions may not be used within nonlinear
-  expressions. See the example below::
+- :ref:`userfunctions` may be used within nonlinear
+  expressions only after they are registered.
+  For example::
 
     myfunction(a,b) = exp(a)*b
     @variable(m, x); @variable(m, y)
-    @NLobjective(m, Min, myfunction(x,y)) # ERROR
+    @NLobjective(m, Min, myfunction(x,y)) # ERROR. Needs JuMP.register() first.
     @NLobjective(m, Min, exp(x)*y) # Okay
 
 - ``AffExpr`` and ``QuadExpr`` objects cannot currently be used inside nonlinear
@@ -133,6 +134,8 @@ Using nonlinear parameters can be faster than creating a new model from scratch
 with updated data because JuMP is able to avoid repeating a number of steps
 in processing the model before handing it off to the solver.
 
+.. _userfunctions:
+
 User-defined functions
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -146,22 +149,22 @@ JuMP uses `ForwardDiff.jl <https://github.com/JuliaDiff/ForwardDiff.jl>`_ to per
     mysquare(x) = x^2
     myf(x,y) = (x-1)^2+(y-2)^2
 
-    JuMP.register(:myf, 2, myf, autodiff=true)
-    JuMP.register(:mysquare, 1, mysquare, autodiff=true)
-
     m = Model()
+
+    JuMP.register(m, :myf, 2, myf, autodiff=true)
+    JuMP.register(m, :mysquare, 1, mysquare, autodiff=true)
 
     @variable(m, x[1:2] >= 0.5)
     @NLobjective(m, Min, myf(x[1],mysquare(x[2])))
 
-The above code creates a JuMP model with the objective function ``(x[1]-1)^2 + (x[2]^2-2)^2``. The first argument to ``JuMP.register`` is a Julia symbol object which registers the name of the user-defined function in JuMP expressions; the JuMP name need not be the same as the name of the corresponding Julia method. The second argument specifies how many arguments the function takes. The third argument is the name of the Julia method which computes the function, and ``autodiff=true`` instructs JuMP to compute exact gradients automatically.
+The above code creates a JuMP model with the objective function ``(x[1]-1)^2 + (x[2]^2-2)^2``. The first argument to ``JuMP.register`` the model for which the functions are registered. The second argument is a Julia symbol object which serves as the name of the user-defined function in JuMP expressions; the JuMP name need not be the same as the name of the corresponding Julia method. The third argument specifies how many arguments the function takes. The fourth argument is the name of the Julia method which computes the function, and ``autodiff=true`` instructs JuMP to compute exact gradients automatically.
 
 .. note::
     All arguments to user-defined functions are scalars, not vectors. To define a function which takes a large number of arguments, you may use the splatting syntax ``f(x...) = ...``.
 
 Forward-mode automatic differentiation as implemented by ForwardDiff.jl has a computational cost that scales linearly with the number of input dimensions. As such, it is not the most efficient way to compute gradients of user-defined functions if the number of input arguments is large. In this case, users may want to provide their own routines for evaluating gradients. The more general syntax for ``JuMP.register`` which accepts user-provided derivative evaluation routines is::
 
-    JuMP.register(s::Symbol, dimension::Integer, f::Function, ∇f::Function, ∇²f::Function)
+    JuMP.register(m::Model, s::Symbol, dimension::Integer, f::Function, ∇f::Function, ∇²f::Function)
 
 The input differs for functions which take a single input argument and functions which take more than one. For univariate functions, the derivative evaluation routines should return a number which represents the first and second-order derivatives respectively. For multivariate functions, the derivative evaluation routines will be passed a gradient vector which they must explicitly fill. Second-order derivatives of multivariate functions are not currently supported; this argument should be omitted. The following example sets up the same optimization problem as before, but now we explicitly provide evaluation routines for the user-defined functions::
 
@@ -175,15 +178,13 @@ The input differs for functions which take a single input argument and functions
         g[2] = 2*(y-2)
     end
 
-    JuMP.register(:myf, 2, myf, ∇f)
-    JuMP.register(:mysquare, 1, mysquare, mysquare_prime, mysquare_primeprime)
-
     m = Model()
+
+    JuMP.register(m, :myf, 2, myf, ∇f)
+    JuMP.register(m, :mysquare, 1, mysquare, mysquare_prime, mysquare_primeprime)
 
     @variable(m, x[1:2] >= 0.5)
     @NLobjective(m, Min, myf(x[1],mysquare(x[2])))
-
-Support for user-provided functions was recently introduced in JuMP 0.12 and is not mature. Please let us know if you find any important functionality missing.
 
 Factors affecting solution time
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

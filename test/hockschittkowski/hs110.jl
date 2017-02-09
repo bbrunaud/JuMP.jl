@@ -22,18 +22,18 @@
 using JuMP
 using Base.Test
 
-let
+@testset "HS110" begin
 
 m = Model()
 @variable(m, -2.001 <= x[1:10] <= 9.999, start = 9)
 
 @NLobjective(m, Min,
-    sum{ log(x[j] - 2)^2 + log(10 - x[j])^2, j=1:10} -
-    prod{x[i],i=1:10} ^ 0.2
+    sum( log(x[j] - 2)^2 + log(10 - x[j])^2 for j=1:10) -
+    prod( x[i] for i=1:10) ^ 0.2
 )
 
 solve(m)
 
-@test_approx_eq_eps getobjectivevalue(m) -45.77846971 1e-5
+@test isapprox(getobjectivevalue(m), -45.77846971, atol=1e-5)
 
 end

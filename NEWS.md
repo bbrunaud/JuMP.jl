@@ -1,10 +1,51 @@
 JuMP release notes
 ==================
 
+<<<<<<< HEAD
 Version 0.14.1 (September 12, 2016)
 -----------------------------------
 
   * More consistent handling of states in informational callbacks
+=======
+Version 0.15.1 (January 31, 2017)
+---------------------------------
+
+  * Bugfix for ``@LinearConstraints`` and friends
+
+
+Version 0.15.0 (December 22, 2016)
+----------------------------------
+
+  * Julia 0.5.0 is the minimum required version for this release.
+  * Document support for BARON solver
+  * Enable info callbacks in more states than before, e.g. for recording solutions.
+    New ``when`` argument to ``addinfocallback`` ([#814](https://github.com/JuliaOpt/JuMP.jl/pull/814), thanks @yeesian)
+  * Improved support for anonymous variables. This includes new warnings for potentially confusing use of the traditional non-anonymous syntax:
+    * When multiple variables in a model are given the same name
+    * When non-symbols are used as names, e.g., ``@variable(m, x[1][1:N])``
+  * Improvements in iterating over JuMP containers ([#836](https://github.com/JuliaOpt/JuMP.jl/pull/836), thanks @IssamT)
+  * Support for writing variable names in .lp file output (Thanks @leethargo)
+  * Support for querying duals to SDP problems (Thanks @blegat)
+  * The comprehension syntax with curly braces ``sum{}``, ``prod{}``, and ``norm2{}`` has been deprecated
+    in favor of Julia's native comprehension syntax ``sum()``, ``prod()`` and ``norm()`` as previously announced.
+    (For early adopters of the new syntax, ``norm2()`` was renamed to ``norm()`` without deprecation.)
+  * Unit tests rewritten to use Base.Test instead of FactCheck
+  * Improved support for operations with matrices of JuMP types (Thanks @ExpandingMan)
+  * The syntax to halt a solver from inside a callback has changed from ``throw(CallbackAbort())`` to ``return JuMP.StopTheSolver``
+  * Minor bug fixes
+
+Version 0.14.2 (December 12, 2016)
+----------------------------------
+
+  * Allow singeton anonymous variables (includes bugfix)
+
+Version 0.14.1 (September 12, 2016)
+-----------------------------------
+
+  * More consistent handling of states in informational callbacks,
+    includes a new ``when`` parameter to ``addinfocallback`` for
+    specifying in which state an informational callback should be called.
+>>>>>>> 9bef25fe7b64492fc0343f5bd3737d02a92cef24
 
 Version 0.14.0 (August 7, 2016)
 -------------------------------

@@ -6,12 +6,12 @@
 Solver Callbacks
 ----------------
 
-Many mixed-integer programming solvers offer the ability to modify the solve process.
+Many mixed-integer (linear, conic, and nonlinear) programming solvers offer the ability to modify the solve process.
 Examples include changing branching decisions in branch-and-bound, adding custom cutting planes, providing custom heuristics to find feasible solutions, or implementing on-demand separators to add new constraints only when they are violated by the current solution (also known as lazy constraints).
 
 While historically this functionality has been limited to solver-specific interfaces,
 JuMP provides *solver-independent* support for a number of commonly used solver callbacks. Currently, we support lazy constraints, user-provided cuts, and user-provided
-heuristics for the Gurobi, CPLEX, and GLPK solvers. We do not yet support any
+heuristics for the Gurobi, CPLEX, GLPK, and SCIP solvers. We do not yet support any
 other class of callbacks, but they may be accessible by using the solver's
 low-level interface.
 
@@ -179,7 +179,7 @@ Consider the following example which is related to the lazy constraint example. 
             # Cut off this solution
             println("Fractional solution was in top right, cut it off")
             # Use the original variables
-            @addusercut(cb, y + x <= 3)
+            @usercut(cb, y + x <= 3)
         end
     end  # End of callback function
 
@@ -423,8 +423,8 @@ This code can also be found in ``/JuMP/examples/simplelazy2.jl``.
 Exiting a callback early
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-If you need to exit the optimization process earlier than a solver otherwise would, it is possible to throw a ``CallbackAbort`` exception in callback code::
+If you need to exit the optimization process earlier than a solver otherwise would, it is possible to return ``JuMP.StopTheSolver`` from the callback code::
 
-    throw(CallbackAbort())
+    return JuMP.StopTheSolver
 
 This will trigger the solver to exit immediately and return a ``:UserLimit`` status.

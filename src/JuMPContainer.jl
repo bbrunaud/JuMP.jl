@@ -42,6 +42,9 @@ type JuMPContainerData
     condition
 end
 
+# Needed by getvaluewarn when called by _mapInner
+getname(data::JuMPContainerData) = data.name
+
 #JuMPDict{T,N}(name::AbstractString) =
 #    JuMPDict{T,N}(Dict{NTuple{N},T}(), name)
 
@@ -87,10 +90,10 @@ function gendict(instancename,T,idxsets...)
     end
     sizes = Expr(:tuple, [:(length($rng)) for rng in idxsets]...)
     if truearray
-        :($instancename = Array($T, $sizes))
+        :($instancename = Array($T, $sizes...))
     else
         indexsets = Expr(:tuple, idxsets...)
-        :($instancename = JuMPArray(Array($T, $sizes), $indexsets))
+        :($instancename = JuMPArray(Array($T, $sizes...), $indexsets))
     end
 end
 
@@ -98,9 +101,15 @@ pushmeta!(x::JuMPContainer, sym::Symbol, val) = (x.meta[sym] = val)
 getmeta(x::JuMPContainer, sym::Symbol) = x.meta[sym]
 
 # duck typing approach -- if eltype(innerArray) doesn't support accessor, will fail
-for accessor in (:getdual, :getlowerbound, :getupperbound)
-    @eval $accessor(x::Union{JuMPContainer,Array}) = map($accessor,x)
+for accessor in (:getdual, :getlowerbound, :getupperbound, :getvalue)
+    @eval $accessor(x::AbstractArray) = map($accessor,x)
 end
+# With JuMPContainer, we take care in _mapInner of the warning if NaN values are returned
+# by the accessor so we use the inner accessor that does not generate warnings
+for (accessor, inner) in ((:getdual, :_getDual), (:getlowerbound, :getlowerbound), (:getupperbound, :getupperbound), (:getvalue, :_getValue))
+    @eval $accessor(x::JuMPContainer) = _map($inner,x)
+end
+
 
 _similar(x::Array) = Array(Float64,size(x))
 _similar{T}(x::Dict{T}) = Dict{T,Float64}()
@@ -108,15 +117,24 @@ _similar{T}(x::Dict{T}) = Dict{T,Float64}()
 _innercontainer(x::JuMPArray) = x.innerArray
 _innercontainer(x::JuMPDict)  = x.tupledict
 
-function _getValueInner(x)
+# Warning for getter returning NaN
+function _warnnan(f, data)
+    if f === _getValue
+        getvaluewarn(data)
+    elseif f === _getDual
+        getdualwarn(data)
+    end
+end
+
+function _mapInner(f, x::JuMPContainer)
     vars = _innercontainer(x)
     vals = _similar(vars)
     data = printdata(x)
     warnedyet = false
     for I in eachindex(vars)
-        tmp = _getValue(vars[I])
+        tmp = f(vars[I])
         if isnan(tmp) && !warnedyet
-            warn("Variable value not defined for entry of $(data.name). Check that the model was properly solved.")
+            _warnnan(f, data.name)
             warnedyet = true
         end
         vals[I] = tmp
@@ -127,9 +145,10 @@ end
 JuMPContainer_from(x::JuMPDict,inner) = JuMPDict(inner)
 JuMPContainer_from(x::JuMPArray,inner) = JuMPArray(inner, x.indexsets)
 
-function getvalue(x::JuMPContainer)
-    getvalue_warn(x)
-    ret = JuMPContainer_from(x,_getValueInner(x))
+# The name _map is used instead of map so that this function is called instead of map(::Function, ::JuMPArray)
+function _map(f, x::JuMPContainer)
+    mapcontainer_warn(f, x)
+    ret = JuMPContainer_from(x, _mapInner(f, x))
     # I guess copy!(::Dict, ::Dict) isn't defined, so...
     for (key,val) in x.meta
         ret.meta[key] = val
@@ -151,15 +170,17 @@ Base.ndims{T,N}(x::JuMPDict{T,N}) = N
 Base.abs(x::JuMPDict) = map(abs, x)
 # avoid dangerous behavior with "end" (#730)
 Base.endof(x::JuMPArray) = error("endof() (and \"end\" syntax) not implemented for JuMPArray objects.")
-Base.size(x::JuMPArray) = error("size (and \"end\" syntax) not implemented for JuMPArray objects. Use JuMP.size if you want to access the dimensions.")
-Base.size(x::JuMPArray,k) = error("size (and \"end\" syntax) not implemented for JuMPArray objects. Use JuMP.size if you want to access the dimensions.")
+Base.size(x::JuMPArray) = error(string("size (and \"end\" syntax) not implemented for JuMPArray objects.",
+"Use JuMP.size if you want to access the dimensions."))
+Base.size(x::JuMPArray,k) = error(string("size (and \"end\" syntax) not implemented for JuMPArray objects.",
+" Use JuMP.size if you want to access the dimensions."))
 size(x::JuMPArray) = size(x.innerArray)
 size(x::JuMPArray,k) = size(x.innerArray,k)
 # for uses of size() within JuMP
 size(x) = Base.size(x)
 size(x,k) = Base.size(x,k)
 # delegate one-argument functions
-Compat.issymmetric(x::JuMPArray) = Compat.issymmetric(x.innerArray)
+Base.issymmetric(x::JuMPArray) = issymmetric(x.innerArray)
 
 Base.eltype{T}(x::JuMPContainer{T}) = T
 
@@ -183,13 +204,80 @@ Base.length(it::ValueIterator)  = length(it.x)
 
 type KeyIterator{JA<:JuMPArray}
     x::JA
+    dim::Int
+    next_k_cache::Array{Any,1}
+    function KeyIterator(d)
+        n = ndims(d.innerArray)
+        new(d, n, Array(Any, n+1))
+    end
 end
-Base.start(it::KeyIterator)   =  start(it.x.innerArray)
-@generated __next{T,N,NT}(x::JuMPArray{T,N,NT}, k) =
+
+KeyIterator{JA}(d::JA) = KeyIterator{JA}(d)
+
+function indexability(x::JuMPArray)
+    for i in  1:length(x.indexsets)
+        if !method_exists(getindex, (typeof(x.indexsets[i]),))
+            return false
+        end
+    end
+
+    return true
+end
+
+function Base.start(it::KeyIterator)
+    if indexability(it.x)
+        return start(it.x.innerArray)
+    else
+        return notindexable_start(it.x)
+    end
+end
+
+@generated function notindexable_start{T,N,NT}(x::JuMPArray{T,N,NT})
+    quote
+        $(Expr(:tuple, 0, [:(start(x.indexsets[$i])) for i in 1:N]...))
+    end
+end
+
+@generated function _next{T,N,NT}(x::JuMPArray{T,N,NT}, k::Tuple)
+    quote
+        $(Expr(:tuple, [:(next(x.indexsets[$i], k[$i+1])[1]) for i in 1:N]...))
+    end
+end
+
+function Base.next(it::KeyIterator, k::Tuple)
+    cartesian_key = _next(it.x, k)
+    pos = -1
+    for i in 1:it.dim
+        if !done(it.x.indexsets[i], next(it.x.indexsets[i], k[i+1])[2] )
+            pos = i
+            break
+        end
+    end
+    if pos == - 1
+        it.next_k_cache[1] = 1
+        return cartesian_key, tuple(it.next_k_cache...)
+    end
+    it.next_k_cache[1] = 0
+    for i in 1:it.dim
+        if i < pos
+            it.next_k_cache[i+1] = start(it.x.indexsets[i])
+        elseif i == pos
+            it.next_k_cache[i+1] = next(it.x.indexsets[i], k[i+1])[2]
+        else
+            it.next_k_cache[i+1] = k[i+1]
+        end
+    end
+    cartesian_key, tuple(it.next_k_cache...)
+end
+
+Base.done(it::KeyIterator, k::Tuple) = (k[1] == 1)
+
+@generated __next{T,N,NT}(x::JuMPArray{T,N,NT}, k::Integer) =
     quote
         subidx = ind2sub(size(x),k)
         $(Expr(:tuple, [:(x.indexsets[$i][subidx[$i]]) for i in 1:N]...)), next(x.innerArray,k)[2]
     end
-Base.next(it::KeyIterator, k) = __next(it.x,k)
-Base.done(it::KeyIterator, k) =   done(it.x.innerArray, k)
+Base.next(it::KeyIterator, k) = __next(it.x,k::Integer)
+Base.done(it::KeyIterator, k) = done(it.x.innerArray, k::Integer)
+
 Base.length(it::KeyIterator)  = length(it.x.innerArray)

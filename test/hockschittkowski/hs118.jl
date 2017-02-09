@@ -21,7 +21,7 @@
 using JuMP
 using Base.Test
 
-let
+@testset "HS118" begin
 
 m = Model()
 
@@ -43,12 +43,12 @@ end
 @variable(m, L[i] <= x[i=1:15] <= U[i])
 
 @NLobjective(m, Min,
-    sum{2.3     * x[3*k+1]   +
+    sum(2.3     * x[3*k+1]   +
         0.0001  * x[3*k+1]^2 +
         1.7     * x[3*k+2]   +
         0.0001  * x[3*k+2]^2 +
         2.2     * x[3*k+3] +
-        0.00015 * x[3*k+3]^2, k=0:4})
+        0.00015 * x[3*k+3]^2 for k=0:4))
 
 # setobjective(m, :Min,
 #   sum([(2.3     * x[3*k+1]   +
@@ -104,10 +104,10 @@ solve(m)
 
 #println(getvalue(x))
 
-@test_approx_eq_eps getvalue(x[1]) 8.0  1e-5
-@test_approx_eq_eps getvalue(x[2]) 49.0 1e-5
-@test_approx_eq_eps getvalue(x[3]) 3.0  1e-5
-@test_approx_eq_eps getvalue(x[4]) 1.0  1e-5
-@test_approx_eq_eps getobjectivevalue(m) 664.82045 1e-5
+@test isapprox(getvalue(x[1]), 8.0, atol=1e-5)
+@test isapprox(getvalue(x[2]), 49.0, atol=1e-5)
+@test isapprox(getvalue(x[3]), 3.0, atol=1e-5)
+@test isapprox(getvalue(x[4]), 1.0, atol=1e-5)
+@test isapprox(getobjectivevalue(m), 664.82045, atol=1e-5)
 
 end

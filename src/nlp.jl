@@ -19,6 +19,8 @@ type NLPData
     nlexpr::Vector{NonlinearExprData}
     nlconstrDuals::Vector{Float64}
     nlparamvalues::Vector{Float64}
+    user_operators::ReverseDiffSparse.UserOperatorRegistry
+    largest_user_input_dimension::Int
     evaluator
 end
 
@@ -40,7 +42,7 @@ getvalue(p::NonlinearParameter) = p.m.nlpdata.nlparamvalues[p.index]::Float64
 
 setvalue(p::NonlinearParameter,v::Number) = (p.m.nlpdata.nlparamvalues[p.index] = v)
 
-NLPData() = NLPData(nothing, NonlinearConstraint[], NonlinearExprData[], Float64[], Float64[], nothing)
+NLPData() = NLPData(nothing, NonlinearConstraint[], NonlinearExprData[], Float64[], Float64[], ReverseDiffSparse.UserOperatorRegistry(), 0, nothing)
 
 Base.copy(::NLPData) = error("Copying nonlinear problems not yet implemented")
 
@@ -54,9 +56,11 @@ function getdual(c::ConstraintRef{Model,NonlinearConstraint})
     initNLP(c.m)
     nldata::NLPData = c.m.nlpdata
     if length(nldata.nlconstrDuals) != length(nldata.nlconstr)
-        error("Dual solution not available. Check that the model was properly solved.")
+        getdualwarn(c)
+        NaN
+    else
+        nldata.nlconstrDuals[c.idx]
     end
-    return nldata.nlconstrDuals[c.idx]
 end
 
 type FunctionStorage
@@ -131,8 +135,6 @@ type NLPEvaluator <: MathProgBase.AbstractNLPEvaluator
         d = new(m)
         numVar = m.numCols
         d.A = prepConstrMatrix(m)
-        d.jac_storage = Array(Float64,numVar)
-        d.user_output_buffer = Array(Float64,numVar)
         # check if we have any user-defined operators, in which case we need to
         # disable hessians.
         if isa(m.nlpdata,NLPData)
@@ -150,8 +152,12 @@ type NLPEvaluator <: MathProgBase.AbstractNLPEvaluator
                 has_user_mv_operator |= ReverseDiffSparse.has_user_multivariate_operators(nlconstr.terms.nd)
             end
             d.disable_2ndorder = has_user_mv_operator
+            d.user_output_buffer = Array(Float64,m.nlpdata.largest_user_input_dimension)
+            d.jac_storage = Array(Float64,max(numVar,m.nlpdata.largest_user_input_dimension))
         else
             d.disable_2ndorder = false
+            d.user_output_buffer = Array(Float64,0)
+            d.jac_storage = Array(Float64,numVar)
         end
 
         d.eval_f_timer = 0
@@ -252,7 +258,8 @@ function MathProgBase.initialize(d::NLPEvaluator, requested_features::Vector{Sym
 
     tic()
 
-    d.linobj, linrowlb, linrowub = prepProblemBounds(d.m)
+    d.linobj = prepAffObjective(d.m)
+    linrowlb, linrowub = prepConstrBounds(d.m)
     numVar = length(d.linobj)
 
     d.want_hess = (:Hess in requested_features)
@@ -273,14 +280,6 @@ function MathProgBase.initialize(d::NLPEvaluator, requested_features::Vector{Sym
         push!(main_expressions,nlconstr.terms.nd)
     end
     d.subexpression_order, individual_order = order_subexpressions(main_expressions,subexpr)
-    if :ExprGraph in requested_features
-        d.subexpressions_as_julia_expressions = Array(Any,length(subexpr))
-        for k in d.subexpression_order
-            ex = nldata.nlexpr[k]
-            adj = adjmat(ex.nd)
-            d.subexpressions_as_julia_expressions[k] = tapeToExpr(1, ex.nd, adj, ex.const_values, d.parameter_values, d.subexpressions_as_julia_expressions)
-        end
-    end
 
     d.subexpression_linearity = Array(Linearity, length(nldata.nlexpr))
     subexpression_variables = Array(Vector{Int}, length(nldata.nlexpr))
@@ -322,6 +321,18 @@ function MathProgBase.initialize(d::NLPEvaluator, requested_features::Vector{Sym
             subexpression_edgelist[k] = empty_edgelist
         end
 
+    end
+
+    if :ExprGraph in requested_features
+        d.subexpressions_as_julia_expressions = Array(Any,length(subexpr))
+        for k in d.subexpression_order
+            if d.subexpression_linearity[k] != CONSTANT || !SIMPLIFY
+                ex = d.subexpressions[k]
+                d.subexpressions_as_julia_expressions[k] = tapeToExpr(d.m, 1, ex.nd, ex.adj, ex.const_values, d.parameter_values, d.subexpressions_as_julia_expressions, nldata.user_operators, true, true)
+            else
+                d.subexpressions_as_julia_expressions[k] = d.subexpression_forward_values[k]
+            end
+        end
     end
 
     if SIMPLIFY
@@ -420,6 +431,7 @@ end
 function forward_eval_all(d::NLPEvaluator,x)
     # do a forward pass on all expressions at x
     subexpr_values = d.subexpression_forward_values
+    user_operators = d.m.nlpdata.user_operators::ReverseDiffSparse.UserOperatorRegistry
     user_input_buffer = d.jac_storage
     user_output_buffer = d.user_output_buffer
     SIMPLIFY = d.m.simplify_nonlinear_expressions
@@ -428,14 +440,14 @@ function forward_eval_all(d::NLPEvaluator,x)
             continue
         end
         ex = d.subexpressions[k]
-        subexpr_values[k] = forward_eval(ex.forward_storage,ex.partials_storage,ex.nd,ex.adj,ex.const_values,d.parameter_values,x,subexpr_values,user_input_buffer,user_output_buffer)
+        subexpr_values[k] = forward_eval(ex.forward_storage,ex.partials_storage,ex.nd,ex.adj,ex.const_values,d.parameter_values,x,subexpr_values,user_input_buffer,user_output_buffer, user_operators=user_operators)
     end
     if d.has_nlobj
         ex = d.objective
-        forward_eval(ex.forward_storage,ex.partials_storage,ex.nd,ex.adj,ex.const_values,d.parameter_values,x,subexpr_values,user_input_buffer,user_output_buffer)
+        forward_eval(ex.forward_storage,ex.partials_storage,ex.nd,ex.adj,ex.const_values,d.parameter_values,x,subexpr_values,user_input_buffer,user_output_buffer,user_operators=user_operators)
     end
     for ex in d.constraints
-        forward_eval(ex.forward_storage,ex.partials_storage,ex.nd,ex.adj,ex.const_values,d.parameter_values,x,subexpr_values,user_input_buffer,user_output_buffer)
+        forward_eval(ex.forward_storage,ex.partials_storage,ex.nd,ex.adj,ex.const_values,d.parameter_values,x,subexpr_values,user_input_buffer,user_output_buffer,user_operators=user_operators)
     end
 end
 
@@ -686,7 +698,7 @@ function MathProgBase.eval_hesslag_prod(
         subexpr = d.subexpressions[expridx]
         sub_forward_storage_ϵ = reinterpret(ForwardDiff.Partials{1,Float64},subexpr.forward_storage_ϵ)
         sub_partials_storage_ϵ = reinterpret(ForwardDiff.Partials{1,Float64},subexpr.partials_storage_ϵ)
-        subexpr_forward_values_ϵ[expridx] = forward_eval_ϵ(subexpr.forward_storage,sub_forward_storage_ϵ, subexpr.partials_storage, sub_partials_storage_ϵ, subexpr.nd, subexpr.adj, input_ϵ, subexpr_forward_values_ϵ)
+        subexpr_forward_values_ϵ[expridx] = forward_eval_ϵ(subexpr.forward_storage,sub_forward_storage_ϵ, subexpr.partials_storage, sub_partials_storage_ϵ, subexpr.nd, subexpr.adj, input_ϵ, subexpr_forward_values_ϵ,user_operators=nldata.user_operators)
     end
     # we only need to do one reverse pass through the subexpressions as well
     zero_ϵ = zero(ForwardDiff.Partials{1,Float64})
@@ -696,7 +708,7 @@ function MathProgBase.eval_hesslag_prod(
     fill!(output_ϵ,zero_ϵ)
     if d.has_nlobj
         ex = d.objective
-        forward_eval_ϵ(ex.forward_storage, forward_storage_ϵ, ex.partials_storage, partials_storage_ϵ, ex.nd,ex.adj,input_ϵ, subexpr_forward_values_ϵ)
+        forward_eval_ϵ(ex.forward_storage, forward_storage_ϵ, ex.partials_storage, partials_storage_ϵ, ex.nd,ex.adj,input_ϵ, subexpr_forward_values_ϵ,user_operators=nldata.user_operators)
         reverse_eval_ϵ(output_ϵ,ex.reverse_storage, reverse_storage_ϵ,ex.partials_storage, partials_storage_ϵ,ex.nd,ex.adj,d.subexpression_reverse_values,subexpr_reverse_values_ϵ, σ, zero_ϵ)
     end
 
@@ -704,7 +716,7 @@ function MathProgBase.eval_hesslag_prod(
     for i in 1:length(d.constraints)
         ex = d.constraints[i]
         l = μ[row]
-        forward_eval_ϵ(ex.forward_storage, forward_storage_ϵ, ex.partials_storage, partials_storage_ϵ, ex.nd,ex.adj, input_ϵ,subexpr_forward_values_ϵ)
+        forward_eval_ϵ(ex.forward_storage, forward_storage_ϵ, ex.partials_storage, partials_storage_ϵ, ex.nd,ex.adj, input_ϵ,subexpr_forward_values_ϵ,user_operators=nldata.user_operators)
         reverse_eval_ϵ(output_ϵ, ex.reverse_storage, reverse_storage_ϵ, ex.partials_storage, partials_storage_ϵ, ex.nd,ex.adj,d.subexpression_reverse_values,subexpr_reverse_values_ϵ, l, zero_ϵ)
         row += 1
     end
@@ -811,7 +823,7 @@ function hessian_slice_inner{CHUNK}(d, ex, R, input_ϵ, output_ϵ, ::Type{Val{CH
     partials_storage_ϵ = reinterpret_unsafe(ForwardDiff.Partials{CHUNK,Float64},d.partials_storage_ϵ)
     zero_ϵ = zero(ForwardDiff.Partials{CHUNK,Float64})
 
-
+    user_operators = d.m.nlpdata.user_operators::ReverseDiffSparse.UserOperatorRegistry
     SIMPLIFY = d.m.simplify_nonlinear_expressions
     # do a forward pass
     for expridx in ex.dependent_subexpressions
@@ -821,9 +833,9 @@ function hessian_slice_inner{CHUNK}(d, ex, R, input_ϵ, output_ϵ, ::Type{Val{CH
         subexpr = d.subexpressions[expridx]
         sub_forward_storage_ϵ = reinterpret_unsafe(ForwardDiff.Partials{CHUNK,Float64},subexpr.forward_storage_ϵ)
         sub_partials_storage_ϵ = reinterpret_unsafe(ForwardDiff.Partials{CHUNK,Float64},subexpr.partials_storage_ϵ)
-        subexpr_forward_values_ϵ[expridx] = forward_eval_ϵ(subexpr.forward_storage,sub_forward_storage_ϵ,subexpr.partials_storage,sub_partials_storage_ϵ, subexpr.nd, subexpr.adj, input_ϵ, subexpr_forward_values_ϵ)
+        subexpr_forward_values_ϵ[expridx] = forward_eval_ϵ(subexpr.forward_storage,sub_forward_storage_ϵ,subexpr.partials_storage,sub_partials_storage_ϵ, subexpr.nd, subexpr.adj, input_ϵ, subexpr_forward_values_ϵ,user_operators=user_operators)
     end
-    forward_eval_ϵ(ex.forward_storage,forward_storage_ϵ,ex.partials_storage, partials_storage_ϵ,ex.nd,ex.adj,input_ϵ, subexpr_forward_values_ϵ)
+    forward_eval_ϵ(ex.forward_storage,forward_storage_ϵ,ex.partials_storage, partials_storage_ϵ,ex.nd,ex.adj,input_ϵ, subexpr_forward_values_ϵ,user_operators=user_operators)
 
     # do a reverse pass
     subexpr_reverse_values_ϵ[ex.dependent_subexpressions] = zero_ϵ
@@ -1040,23 +1052,74 @@ function quadToExpr(q::QuadExpr,constant::Bool)
     return ex
 end
 
+type VariablePrintWrapper
+    v::Variable
+    mode
+end
+Base.show(io::IO,v::VariablePrintWrapper) = print(io,var_str(v.mode,v.v))
+type ParameterPrintWrapper
+    idx::Int
+    mode
+end
+function Base.show(io::IO,p::ParameterPrintWrapper)
+    if p.mode == IJuliaMode
+        print(io,"parameter_{$(p.idx)}")
+    else
+        print(io,"parameter[$(p.idx)]")
+    end
+end
+type SubexpressionPrintWrapper
+    idx::Int
+    mode
+end
+function Base.show(io::IO,s::SubexpressionPrintWrapper)
+    if s.mode == IJuliaMode
+        print(io,"subexpression_{$(s.idx)}")
+    else
+        print(io,"subexpression[$(s.idx)]")
+    end
+end
+
 # we splat in the subexpressions (for now)
-function tapeToExpr(k, nd::Vector{NodeData}, adj, const_values, parameter_values, subexpressions::Vector{Any})
+function tapeToExpr(m::Model, k, nd::Vector{NodeData}, adj, const_values, parameter_values, subexpressions::Vector{Any},user_operators::ReverseDiffSparse.UserOperatorRegistry, generic_variable_names::Bool, splat_subexpressions::Bool, print_mode=REPLMode)
 
     children_arr = rowvals(adj)
 
     nod = nd[k]
     if nod.nodetype == VARIABLE
-        return Expr(:ref,:x,nod.index)
+        if generic_variable_names
+            return Expr(:ref,:x,nod.index)
+        else
+            # mode only matters when generic_variable_names == false
+            return VariablePrintWrapper(Variable(m,nod.index),print_mode)
+        end
     elseif nod.nodetype == VALUE
         return const_values[nod.index]
     elseif nod.nodetype == SUBEXPRESSION
-        return subexpressions[nod.index]
+        if splat_subexpressions
+            return subexpressions[nod.index]
+        else
+            return SubexpressionPrintWrapper(nod.index,print_mode)
+        end
     elseif nod.nodetype == PARAMETER
-        return parameter_values[nod.index]
+        if splat_subexpressions
+            return parameter_values[nod.index]
+        else
+            return ParameterPrintWrapper(nod.index,print_mode)
+        end
     elseif nod.nodetype == CALL
         op = nod.index
-        opsymbol = operators[op]
+        opsymbol = :error
+        if op < ReverseDiffSparse.USER_OPERATOR_ID_START
+            opsymbol = operators[op]
+        else
+            for (key,value) in user_operators.multivariate_operator_to_id
+                if value == op - ReverseDiffSparse.USER_OPERATOR_ID_START + 1
+                    opsymbol = key
+                end
+            end
+        end
+        @assert opsymbol != :error
         children_idx = nzrange(adj,k)
         if opsymbol == :+ && length(children_idx) == 0
             return 0
@@ -1065,37 +1128,47 @@ function tapeToExpr(k, nd::Vector{NodeData}, adj, const_values, parameter_values
         end
         ex = Expr(:call,opsymbol)
         for cidx in children_idx
-            push!(ex.args, tapeToExpr(children_arr[cidx], nd, adj, const_values, parameter_values, subexpressions))
+            push!(ex.args, tapeToExpr(m, children_arr[cidx], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode))
         end
         return ex
     elseif nod.nodetype == CALLUNIVAR
         op = nod.index
-        opsymbol = univariate_operators[op]
+        opsymbol = :error
+        if op < ReverseDiffSparse.USER_UNIVAR_OPERATOR_ID_START
+            opsymbol = univariate_operators[op]
+        else
+            for (key,value) in user_operators.univariate_operator_to_id
+                if value == op - ReverseDiffSparse.USER_UNIVAR_OPERATOR_ID_START + 1
+                    opsymbol = key
+                end
+            end
+        end
+        @assert opsymbol != :error
         cidx = first(nzrange(adj,k))
-        return Expr(:call,opsymbol,tapeToExpr(children_arr[cidx], nd, adj, const_values, parameter_values, subexpressions))
+        return Expr(:call,opsymbol,tapeToExpr(m, children_arr[cidx], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode))
     elseif nod.nodetype == COMPARISON
         op = nod.index
         opsymbol = comparison_operators[op]
         children_idx = nzrange(adj,k)
-        if length(children_idx) > 2 || VERSION < v"0.5.0-dev+3231"
+        if length(children_idx) > 2
             ex = Expr(:comparison)
             for cidx in children_idx
-                push!(ex.args, tapeToExpr(children_arr[cidx], nd, adj, const_values, parameter_values, subexpressions))
+                push!(ex.args, tapeToExpr(m, children_arr[cidx], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode))
                 push!(ex.args, opsymbol)
             end
             pop!(ex.args)
         else
             ex = Expr(:call, opsymbol)
-            push!(ex.args, tapeToExpr(children_arr[children_idx[1]], nd, adj, const_values, parameter_values, subexpressions))
-            push!(ex.args, tapeToExpr(children_arr[children_idx[2]], nd, adj, const_values, parameter_values, subexpressions))
+            push!(ex.args, tapeToExpr(m, children_arr[children_idx[1]], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode))
+            push!(ex.args, tapeToExpr(m, children_arr[children_idx[2]], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode))
         end
         return ex
     elseif nod.nodetype == LOGIC
         op = nod.index
         opsymbol = logic_operators[op]
         children_idx = nzrange(adj,k)
-        lhs = tapeToExpr(children_arr[first(children_idx)], nd, adj, const_values, parameter_values, subexpressions)
-        rhs = tapeToExpr(children_arr[last(children_idx)], nd, adj, const_values, parameter_values, subexpressions)
+        lhs = tapeToExpr(m, children_arr[first(children_idx)], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode)
+        rhs = tapeToExpr(m, children_arr[last(children_idx)], nd, adj, const_values, parameter_values, subexpressions, user_operators, generic_variable_names, splat_subexpressions, print_mode)
         return Expr(opsymbol, lhs, rhs)
     end
     error()
@@ -1106,10 +1179,9 @@ end
 
 function MathProgBase.obj_expr(d::NLPEvaluator)
     if d.has_nlobj
-        # for now, don't pass simplified expressions
-        ex = d.m.nlpdata.nlobj
-        adj = adjmat(ex.nd)
-        return tapeToExpr(1, ex.nd, adj, ex.const_values, d.parameter_values, d.subexpressions_as_julia_expressions)
+        # expressions are simplified if requested
+        ex = d.objective
+        return tapeToExpr(d.m, 1, ex.nd, ex.adj, ex.const_values, d.parameter_values, d.subexpressions_as_julia_expressions,d.m.nlpdata.user_operators, true, true)
     else
         return quadToExpr(d.m.obj, true)
     end
@@ -1124,88 +1196,45 @@ function MathProgBase.constr_expr(d::NLPEvaluator,i::Integer)
         if sense(constr) == :range
             return Expr(:comparison, constr.lb, :(<=), ex, :(<=), constr.ub)
         else
-            if VERSION >= v"0.5.0-dev+3231"
-                return Expr(:call, sense(constr), ex, rhs(constr))
-            else
-                return Expr(:comparison, ex, sense(constr), rhs(constr))
-            end
+            return Expr(:call, sense(constr), ex, rhs(constr))
         end
     elseif i > nlin && i <= nlin + nquad
         i -= nlin
         qconstr = d.m.quadconstr[i]
-        if VERSION >= v"0.5.0-dev+3231"
-            return Expr(:call, qconstr.sense, quadToExpr(qconstr.terms, true), 0)
-        else
-            return Expr(:comparison, quadToExpr(qconstr.terms, true), qconstr.sense, 0)
-        end
+        return Expr(:call, qconstr.sense, quadToExpr(qconstr.terms, true), 0)
     else
         i -= nlin + nquad
-        # for now, don't pass simplified expressions
+        ex = d.constraints[i] # may be simplified
+        julia_expr = tapeToExpr(d.m, 1, ex.nd, ex.adj, ex.const_values, d.parameter_values, d.subexpressions_as_julia_expressions,d.m.nlpdata.user_operators, true, true)
         constr = d.m.nlpdata.nlconstr[i]
-        ex = constr.terms
-        adj = adjmat(ex.nd)
-        julia_expr = tapeToExpr(1, ex.nd, adj, ex.const_values, d.parameter_values, d.subexpressions_as_julia_expressions)
         if sense(constr) == :range
             return Expr(:comparison, constr.lb, :(<=), julia_expr, :(<=), constr.ub)
         else
-            if VERSION >= v"0.5.0-dev+3231"
-                return Expr(:call, sense(constr), julia_expr, rhs(constr))
-            else
-                return Expr(:comparison, julia_expr, sense(constr), rhs(constr))
-            end
+            return Expr(:call, sense(constr), julia_expr, rhs(constr))
         end
     end
 end
 
-const ENABLE_NLP_RESOLVE = Array(Bool,1)
 function EnableNLPResolve()
-    ENABLE_NLP_RESOLVE[1] = true
+    Base.warn_once("NLP resolve is now enabled by default. The EnableNLPResolve() method will be removed in a future release.")
+    return
 end
 function DisableNLPResolve()
-    ENABLE_NLP_RESOLVE[1] = false
+    Base.warn_once("NLP resolve is now enabled by default. The DisableNLPResolve() method will be removed in a future release.")
+    return
 end
 export EnableNLPResolve, DisableNLPResolve
 
-
 function _buildInternalModel_nlp(m::Model, traits)
 
-    linobj, linrowlb, linrowub = prepProblemBounds(m)
+    linobj = prepAffObjective(m)
+    linrowlb, linrowub = prepConstrBounds(m)
 
     nldata::NLPData = m.nlpdata
     if m.internalModelLoaded && !m.simplify_nonlinear_expressions
         @assert isa(nldata.evaluator, NLPEvaluator)
         d = nldata.evaluator
         fill!(d.last_x, NaN)
-        if length(nldata.nlparamvalues) == 0 && !ENABLE_NLP_RESOLVE[1]
-            # no parameters and haven't explicitly allowed resolves
-            # error to prevent potentially incorrect answers
-            msg = """
-            There was a recent **breaking** change in behavior
-            for solving sequences of nonlinear models.
-            Previously, users were allowed to modify the data in the model
-            by modifying the values stored in their own data arrays.
-            For example:
-
-            data = [1.0]
-            @NLconstraint(m, data[1]*x <= 1)
-            solve(m)
-            data[1] = 2.0
-            solve(m) # coefficient is updated
-
-            However, this behavior **no longer works**. Instead,
-            nonlinear parameters defined with @defNLParam should be used.
-            See the latest JuMP documentation for more information.
-            It is possible that this model was exploiting the previous behavior,
-            and out of extreme caution we have temporarily introduced
-            this error message.
-            If you are sure that you are solving the correct model,
-            then call `EnableNLPResolve()` at the top of this file to disable
-            this error message.
-            To return to the last version of JuMP which supported the
-            old behavior, run `Pkg.pin("JuMP",v"0.11.1")`.
-            """
-            error(msg)
-        end
     else
         d = NLPEvaluator(m)
         nldata.evaluator = d
@@ -1232,6 +1261,8 @@ function _buildInternalModel_nlp(m::Model, traits)
         initval[isnan(m.colVal)] = 0
         MathProgBase.setwarmstart!(m.internalModel, min(max(m.colLower,initval),m.colUpper))
     end
+
+    registercallbacks(m)
 
     m.internalModelLoaded = true
 
@@ -1299,8 +1330,8 @@ function getvalue(x::NonlinearExpression)
 
     forward_storage = Array(Float64, max_len)
     partials_storage = Array(Float64, max_len)
-    user_input_buffer = zeros(m.numCols)
-    user_output_buffer = zeros(m.numCols)
+    user_input_buffer = zeros(nldata.largest_user_input_dimension)
+    user_output_buffer = zeros(nldata.largest_user_input_dimension)
 
     for k in subexpression_order # compute value of dependent subexpressions
         ex = nldata.nlexpr[k]
@@ -1328,41 +1359,52 @@ function MathProgBase.eval_grad_f(d::UserFunctionEvaluator,grad,x)
     nothing
 end
 
-function UserAutoDiffEvaluator(dimension::Integer, f::Function)
-    ∇f = (out,y) -> ForwardDiff.gradient!(out, x -> f(x...), y)
+function UserAutoDiffEvaluator{T}(dimension::Integer, f::Function, ::Type{T} = Float64)
+    cfg = ForwardDiff.GradientConfig(zeros(T, dimension))
+    ∇f = (out, y) -> ForwardDiff.gradient!(out, x -> f(x...), y, cfg)
     return UserFunctionEvaluator(f, ∇f, dimension)
 end
 
-function register(s::Symbol, dimension::Integer, f::Function; autodiff::Bool=false)
+function register(m::Model, s::Symbol, dimension::Integer, f::Function; autodiff::Bool=false)
     autodiff == true || error("If only the function is provided, must set autodiff=true")
+    initNLP(m)
 
     if dimension == 1
         fprime = x -> ForwardDiff.derivative(f, x)
         fprimeprime = x -> ForwardDiff.derivative(fprime, x)
-        ReverseDiffSparse.register_univariate_operator(s, f, fprime, fprimeprime)
+        ReverseDiffSparse.register_univariate_operator!(m.nlpdata.user_operators, s, f, fprime, fprimeprime)
     else
-        ReverseDiffSparse.register_multivariate_operator(s, UserAutoDiffEvaluator(dimension, f))
+        m.nlpdata.largest_user_input_dimension = max(m.nlpdata.largest_user_input_dimension,dimension)
+        ReverseDiffSparse.register_multivariate_operator!(m.nlpdata.user_operators, s, UserAutoDiffEvaluator(dimension, f))
     end
 
 end
 
-function register(s::Symbol, dimension::Integer, f::Function, ∇f::Function; autodiff::Bool=false)
+function register(m::Model, s::Symbol, dimension::Integer, f::Function, ∇f::Function; autodiff::Bool=false)
+    initNLP(m)
     if dimension == 1
         autodiff == true || error("Currently must provide 2nd order derivatives of univariate functions. Try setting autodiff=true.")
         fprimeprime = x -> ForwardDiff.derivative(∇f, x)
-        ReverseDiffSparse.register_univariate_operator(s, f, ∇f, fprimeprime)
+        ReverseDiffSparse.register_univariate_operator!(m.nlpdata.user_operators, s, f, ∇f, fprimeprime)
     else
         autodiff == false || Base.warn_once("autodiff=true ignored since gradient is already provided.")
+        m.nlpdata.largest_user_input_dimension = max(m.nlpdata.largest_user_input_dimension,dimension)
         d = UserFunctionEvaluator(f, (g,x)->∇f(g,x...), dimension)
-        ReverseDiffSparse.register_multivariate_operator(s, d)
+        ReverseDiffSparse.register_multivariate_operator!(m.nlpdata.user_operators, s, d)
     end
 
 end
 
-function register(s::Symbol, dimension::Integer, f::Function, ∇f::Function, ∇²f::Function)
+function register(m::Model, s::Symbol, dimension::Integer, f::Function, ∇f::Function, ∇²f::Function)
     dimension == 1 || error("Providing hessians for multivariate functions is not yet supported")
-    ReverseDiffSparse.register_univariate_operator(s, f, ∇f, ∇²f)
+    initNLP(m)
+    ReverseDiffSparse.register_univariate_operator!(m.nlpdata.user_operators, s, f, ∇f, ∇²f)
 end
+
+register(s::Symbol, dimension::Integer, f::Function; autodiff::Bool=false) = error("Function registration is now local to JuMP models. JuMP.register requires the model object as the first argument.")
+register(s::Symbol, dimension::Integer, f::Function, ∇f::Function; autodiff::Bool=false) = error("Function registration is now local to JuMP models. JuMP.register requires the model object as the first argument.")
+register(s::Symbol, dimension::Integer, f::Function, ∇f::Function, ∇²f::Function) = error("Function registration is now local to JuMP models. JuMP.register requires the model object as the first argument.")
+
 
 # Ex: setNLobjective(m, :Min, :($x + $y^2))
 function setNLobjective(m::Model, sense::Symbol, x)
@@ -1377,9 +1419,6 @@ end
 
 # Ex: addNLconstraint(m, :($x + $y^2 <= 1))
 function addNLconstraint(m::Model, ex::Expr)
-    if VERSION < v"0.5.0-dev+3231"
-        ex = comparison_to_call(ex)
-    end
     initNLP(m)
     m.internalModelLoaded = false
     if isexpr(ex, :call) # one-sided constraint

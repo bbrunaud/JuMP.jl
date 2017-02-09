@@ -31,7 +31,8 @@ function writeMPS(m::Model, fname::AbstractString)
     end
     gc_enable(true)
 
-    objlincoef, rowlb, rowub = prepProblemBounds(m)
+    objlincoef = prepAffObjective(m)
+    rowlb, rowub = prepConstrBounds(m)
     if m.objSense == :Max
         println("Warning, MPS does not support maximization sense. Flipping objective coefficients.")
         objlincoef = -objlincoef
@@ -175,7 +176,20 @@ end
 # LP File Writer
 # We use the formatting defined at:
 #   http://lpsolve.sourceforge.net/5.0/CPLEX-format.htm
-function writeLP(m::Model, fname::AbstractString)
+
+varname_generic(m::Model, col::Integer) = "VAR$(col)"
+
+function varname_given(m::Model, col::Integer)
+    # TODO: deal with non-ascii characters?
+    name = getname(m, col)
+    for (pat, sub) in [("[", "_"), ("]", ""), (",", "_")]
+        name = replace(name, pat, sub)
+    end
+    name
+end
+
+function writeLP(m::Model, fname::AbstractString; genericnames=true)
+    varname = genericnames ? varname_generic : varname_given
 
     f = open(fname, "w")
 
@@ -198,7 +212,7 @@ function writeLP(m::Model, fname::AbstractString)
         else
             print_shortest(f, abs(objaff.coeffs[ind]))
         end
-        @printf(f, " VAR%d %s ", objaff.vars[ind].col, (objaff.coeffs[ind+1] < 0)? "-" : "+")
+        @printf(f, " %s %s ", varname(m, objaff.vars[ind].col), (objaff.coeffs[ind+1] < 0)? "-" : "+")
     end
     if nnz >= 1
         if nnz == 1
@@ -206,7 +220,7 @@ function writeLP(m::Model, fname::AbstractString)
         else
             print_shortest(f, abs(objaff.coeffs[nnz]))
         end
-        @printf(f, " VAR%d\n", objaff.vars[nnz].col)
+        @printf(f, " %s\n", varname(m, objaff.vars[nnz].col))
     end
 
     # Constraints
@@ -218,7 +232,7 @@ function writeLP(m::Model, fname::AbstractString)
             else
                 print_shortest(f, abs(c.terms.coeffs[ind]))
             end
-            @printf(f, " VAR%d %s ", c.terms.vars[ind].col, (c.terms.coeffs[ind+1] < 0)? "-" : "+")
+            @printf(f, " %s %s ", varname(m, c.terms.vars[ind].col), (c.terms.coeffs[ind+1] < 0)? "-" : "+")
         end
         if nnz >= 1
             if nnz == 1
@@ -226,7 +240,7 @@ function writeLP(m::Model, fname::AbstractString)
             else
                 print_shortest(f, abs(c.terms.coeffs[nnz]))
             end
-            @printf(f, " VAR%d", c.terms.vars[nnz].col)
+            @printf(f, " %s", varname(m, c.terms.vars[nnz].col))
         end
     end
     write(f,"Subject To\n")
@@ -274,10 +288,10 @@ function writeLP(m::Model, fname::AbstractString)
             # No low bound
             if m.colUpper[i] == +Inf
                 # Free
-                @printf(f, " VAR%d free\n", i)
+                @printf(f, " %s free\n", varname(m, i))
             else
                 # x <= finite
-                @printf(f, " -inf <= VAR%d <= ", i)
+                @printf(f, " -inf <= %s <= ", varname(m, i))
                 print_shortest(f, m.colUpper[i])
                 println(f)
             end
@@ -287,12 +301,12 @@ function writeLP(m::Model, fname::AbstractString)
                 # x >= finite
                 @printf(f, " ")
                 print_shortest(f, m.colLower[i])
-                @printf(f," <= VAR%d <= +inf\n", i)
+                @printf(f," <= %s <= +inf\n", varname(m, i))
             else
                 # finite <= x <= finite
                 @printf(f, " ")
                 print_shortest(f, m.colLower[i])
-                @printf(f, " <= VAR%d <= ", i)
+                @printf(f, " <= %s <= ", varname(m, i))
                 print_shortest(f, m.colUpper[i])
                 println(f)
             end
@@ -305,7 +319,7 @@ function writeLP(m::Model, fname::AbstractString)
         t = m.colCat[i]
         (t == :SemiCont || t == :SemiInt) && error("The LP file writer does not currently support semicontinuous or semi-integer variables")
         if t == :Bin || t == :Int
-            @printf(f, " VAR%d\n", i)
+            @printf(f, " %s\n", varname(m, i))
         end
     end
 

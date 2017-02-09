@@ -8,8 +8,7 @@
 # parent is the index of the parent expression
 # values is the name of the list of constants which appear in the expression
 function parseNLExpr(m, x, tapevar, parent, values)
-
-    if isexpr(x,:call) && length(x.args) >= 2 && isexpr(x.args[2],:generator)
+    if isexpr(x,:call) && length(x.args) >= 2 && (isexpr(x.args[2],:generator) || isexpr(x.args[2],:flatten))
         header = x.args[1]
         if issum(header)
             operatorid = operator_to_id[:+]
@@ -24,48 +23,10 @@ function parseNLExpr(m, x, tapevar, parent, values)
         parentvar = gensym()
         push!(block.args, :($parentvar = length($tapevar)))
 
-        # we have a filter condition
-        if isexpr(x.args[2].args[2],:filter)
-            cond = x.args[2].args[2].args[1]
-            # generate inner loop code first and then wrap in for loops
-            innercode = parseNLExpr(m, x.args[2].args[1], tapevar, parentvar, values)
-            code = quote
-                if $(esc(cond))
-                    $innercode
-                end
-            end
-            for level in length(x.args[2].args[2]):-1:2
-                _idxvar, idxset = parseIdxSet(x.args[2].args[2].args[level]::Expr)
-                idxvar = esc(_idxvar)
-                code = :(let
-                    $(localvar(idxvar))
-                    for $idxvar in $(esc(idxset))
-                        $code
-                    end
-                end)
-            end
-            push!(block.args, code)
-        else # no condition
-            innercode = parseNLExpr(m, x.args[2].args[1], tapevar, parentvar, values)
-            code = quote
-                $innercode
-            end
-            for level in length(x.args[2].args):-1:2
-                _idxvar, idxset = parseIdxSet(x.args[2].args[level]::Expr)
-                idxvar = esc(_idxvar)
-                code = :(let
-                    $(localvar(idxvar))
-                    for $idxvar in $(esc(idxset))
-                        $code
-                    end
-                end)
-            end
-            push!(block.args, code)
-        end
+
+        code = parsegen(x.args[2], t -> parseNLExpr(m, t, tapevar, parentvar, values))
+        push!(block.args, code)
         return codeblock
-    end
-    if isexpr(x,:call) && length(x.args) >= 2 && isexpr(x.args[2],:flatten)
-        flatten_error(x.args[2])
     end
 
     if isexpr(x, :call)
@@ -78,17 +39,20 @@ function parseNLExpr(m, x, tapevar, parent, values)
                 push!(block.args, :(push!($tapevar, NodeData(CALLUNIVAR, $operatorid, $parent))))
             else
                 opname = quot(x.args[1])
-                errorstring = "Unrecognized function $opname used in nonlinear expression."
-                errorstring2 = "Incorrect number of arguments for $opname in nonlinear expression."
+                errorstring = "Unrecognized function \"$(x.args[1])\" used in nonlinear expression."
+                errorstring2 = "Incorrect number of arguments for \"$(x.args[1])\" in nonlinear expression."
                 lookupcode = quote
-                    if !haskey(univariate_operator_to_id,$opname)
-                        if haskey(operator_to_id,$opname)
+                    if $(esc(m)).nlpdata === nothing
+                        error($errorstring)
+                    end
+                    if !haskey($(esc(m)).nlpdata.user_operators.univariate_operator_to_id,$opname)
+                        if haskey($(esc(m)).nlpdata.user_operators.multivariate_operator_to_id,$opname)
                             error($errorstring2)
                         else
                             error($errorstring)
                         end
                     end
-                    operatorid = univariate_operator_to_id[$opname]
+                    operatorid = $(esc(m)).nlpdata.user_operators.univariate_operator_to_id[$opname] + ReverseDiffSparse.USER_UNIVAR_OPERATOR_ID_START - 1
                 end
                 push!(block.args, :($lookupcode; push!($tapevar, NodeData(CALLUNIVAR, operatorid, $parent))))
             end
@@ -108,17 +72,20 @@ function parseNLExpr(m, x, tapevar, parent, values)
                 push!(block.args, :(push!($tapevar, NodeData(COMPARISON, $operatorid, $parent))))
             else # could be user defined
                 opname = quot(x.args[1])
-                errorstring = "Unrecognized function $opname used in nonlinear expression."
-                errorstring2 = "Incorrect number of arguments for $opname in nonlinear expression."
+                errorstring = "Unrecognized function \"$(x.args[1])\" used in nonlinear expression."
+                errorstring2 = "Incorrect number of arguments for \"$(x.args[1])\" in nonlinear expression."
                 lookupcode = quote
-                    if !haskey(operator_to_id,$opname)
-                        if haskey(univariate_operator_to_id,$opname)
+                    if $(esc(m)).nlpdata === nothing
+                        error($errorstring)
+                    end
+                    if !haskey($(esc(m)).nlpdata.user_operators.multivariate_operator_to_id,$opname)
+                        if haskey($(esc(m)).nlpdata.user_operators.univariate_operator_to_id,$opname)
                             error($errorstring2)
                         else
                             error($errorstring)
                         end
                     end
-                    operatorid = operator_to_id[$opname]
+                    operatorid = $(esc(m)).nlpdata.user_operators.multivariate_operator_to_id[$opname] + ReverseDiffSparse.USER_OPERATOR_ID_START - 1
                 end
                 push!(block.args, :($lookupcode; push!($tapevar, NodeData(CALL, operatorid, $parent))))
             end
@@ -159,6 +126,7 @@ function parseNLExpr(m, x, tapevar, parent, values)
         return code
     end
     if isexpr(x, :curly)
+        warn_curly(x)
         header = x.args[1]
         if length(x.args) < 3
             error("Need at least two arguments for $header")
@@ -268,13 +236,18 @@ end
 # Variable objects should be spliced into the expression.
 function NonlinearExprData(m::Model, ex::Expr)
     ex = spliceref(m,ex)
-    nd, values = ReverseDiffSparse.expr_to_nodedata(ex)
+    nd, values = ReverseDiffSparse.expr_to_nodedata(ex,m.nlpdata.user_operators)
     return NonlinearExprData(nd, values)
 end
 NonlinearExprData(m::Model, ex) = NonlinearExprData(m, :($ex + 0))
 
 # recursively replace Variable(m, i) with Expr(:ref,:x,i) in ex
-spliceref(m::Model, ex::Expr) = Expr(ex.head,map(e -> spliceref(m,e), ex.args)...)
+function spliceref(m::Model, ex::Expr)
+    if ex.head == :ref # if we have x[1] already in there, something is wrong
+        error("Unrecognized expression $ex.")
+    end
+    return Expr(ex.head,map(e -> spliceref(m,e), ex.args)...)
+end
 function spliceref(m::Model, v::Variable)
     v.m === m || error("Variable $v does not belong to this model")
     return Expr(:ref, :x, linearindex(v))

@@ -13,21 +13,13 @@ isdefined(Base, :__precompile__) && __precompile__()
 module JuMP
 
 importall Base.Operators
+import Base.map
 
 import MathProgBase
 
 using Calculus
 using ReverseDiffSparse
 using ForwardDiff
-using Compat
-
-import Compat: UTF8String, view
-
-@compat import Base.show
-
-function __init__()
-    ENABLE_NLP_RESOLVE[1] = false
-end
 
 export
 # Objects
@@ -79,8 +71,8 @@ type Model <: AbstractModel
 
     # Column data
     numCols::Int
-    colNames::Vector{UTF8String}
-    colNamesIJulia::Vector{UTF8String}
+    colNames::Vector{String}
+    colNamesIJulia::Vector{String}
     colLower::Vector{Float64}
     colUpper::Vector{Float64}
     colCat::Vector{Symbol}
@@ -97,6 +89,11 @@ type Model <: AbstractModel
     linconstrDuals::Vector{Float64}
     conicconstrDuals::Vector{Float64}
     constrDualMap::Vector{Vector{Int}}
+    # Vector of the same length as sdpconstr.
+    # sdpconstrSym[c] is the list of pairs (i,j), i > j
+    # such that a symmetry-enforcing constraint has been created
+    # between sdpconstr[c].terms[i,j] and sdpconstr[c].terms[j,i]
+    sdpconstrSym::Vector{Vector{Tuple{Int,Int}}}
     # internal solver model object
     internalModel
     # Solver+option object from MathProgBase
@@ -127,7 +124,7 @@ type Model <: AbstractModel
     conDict::Dict{Symbol,Any} # dictionary from constraint names to constraint objects
     varData::ObjectIdDict
 
-    getvalue_counter::Int # number of times we call getvalue on a JuMPContainer, so that we can print out a warning
+    map_counter::Int # number of times we call getvalue, getdual, getlowerbound and getupperbound on a JuMPContainer, so that we can print out a warning
     operator_counter::Int # number of times we add large expressions
 
     # Extension dictionary - e.g. for robust
@@ -152,10 +149,10 @@ function Model(;solver=UnsetSolver(), simplify_nonlinear_expressions::Bool=false
           QuadConstraint[],            # quadconstr
           SOSConstraint[],             # sosconstr
           SOCConstraint[],             # socconstr
-          SDConstraint[],             # sdpconstr
+          SDConstraint[],              # sdpconstr
           0,                           # numCols
-          UTF8String[],                # colNames
-          UTF8String[],                # colNamesIJulia
+          String[],                    # colNames
+          String[],                    # colNamesIJulia
           Float64[],                   # colLower
           Float64[],                   # colUpper
           Symbol[],                    # colCat
@@ -166,7 +163,8 @@ function Model(;solver=UnsetSolver(), simplify_nonlinear_expressions::Bool=false
           Float64[],                   # redCosts
           Float64[],                   # linconstrDuals
           Float64[],                   # conicconstrDuals
-          Any[],                       # constrDualsMap
+          Vector{Int}[],               # constrDualMap
+          Vector{Tuple{Int,Int}}[],    # sdpconstrSym
           nothing,                     # internalModel
           solver,                      # solver
           false,                       # internalModelLoaded
@@ -180,7 +178,7 @@ function Model(;solver=UnsetSolver(), simplify_nonlinear_expressions::Bool=false
           Dict{Symbol,Any}(),          # varDict
           Dict{Symbol,Any}(),          # conDict
           ObjectIdDict(),              # varData
-          0,                           # getvalue_counter
+          0,                           # map_counter
           0,                           # operator_counter
           Dict{Symbol,Any}(),          # ext
     )
@@ -190,8 +188,13 @@ end
 MathProgBase.numvar(m::Model) = m.numCols
 MathProgBase.numlinconstr(m::Model) = length(m.linconstr)
 MathProgBase.numquadconstr(m::Model) = length(m.quadconstr)
+numsocconstr(m::Model) = length(m.socconstr)
+numsosconstr(m::Model) = length(m.sosconstr)
+numsdconstr(m::Model) = length(m.sdpconstr)
+numnlconstr(m::Model) = m.nlpdata !== nothing ? length(m.nlpdata.nlconstr) : 0
+
 function MathProgBase.numconstr(m::Model)
-    c = length(m.linconstr) + length(m.quadconstr) + length(m.sosconstr)
+    c = length(m.linconstr) + length(m.quadconstr) + length(m.socconstr) + length(m.sosconstr) + length(m.sdpconstr)
     if m.nlpdata !== nothing
         c += length(m.nlpdata.nlconstr)
     end
@@ -357,7 +360,7 @@ function Variable(m::Model,lower::Number,upper::Number,cat::Symbol,name::Abstrac
         if method_exists(MathProgBase.addvar!, (typeof(m.internalModel),Vector{Int},Vector{Float64},Float64,Float64,Float64))
             MathProgBase.addvar!(m.internalModel,float(lower),float(upper),0.0)
         else
-            Base.warn_once("Solver does not appear to support adding variables to an existing model. Hot-start is disabled.")
+            Base.warn_once("Solver does not appear to support adding variables to an existing model. JuMP's internal model will be discarded.")
             m.internalModelLoaded = false
         end
     end
@@ -389,18 +392,27 @@ getupperbound(v::Variable) = v.m.colUpper[v.col]
 function setvalue(v::Variable, val::Number)
     v.m.colVal[v.col] = val
     if v.m.colCat[v.col] == :Fixed
-        v.m.colLower[v.col] = val
-        v.m.colUpper[v.col] = val
+        error("setvalue for fixed variables is no longer supported. Use JuMP.fix instead.")
     end
+end
+
+# Fix a variable that was not previously fixed
+function fix(v::Variable, val::Number)
+    v.m.colCat[v.col] = :Fixed
+    v.m.colLower[v.col] = val
+    v.m.colUpper[v.col] = val
+    v.m.colVal[v.col] = val
 end
 
 # internal method that doesn't print a warning if the value is NaN
 _getValue(v::Variable) = v.m.colVal[v.col]
 
+getvaluewarn(v) = Base.warn("Variable value not defined for $(getname(v)). Check that the model was properly solved.")
+
 function getvalue(v::Variable)
     ret = _getValue(v)
     if isnan(ret)
-        Base.warn("Variable value not defined for $(getname(v)). Check that the model was properly solved.")
+        getvaluewarn(v)
     end
     ret
 end
@@ -429,7 +441,7 @@ function getvalue(arr::Array{Variable})
             end
         end
     end
-    # Copy printing data from @defVar for Array{Variable} to corresponding Array{Float64} of values
+    # Copy printing data from @variable for Array{Variable} to corresponding Array{Float64} of values
     if registered
         m.varData[ret] = m.varData[arr]
     end
@@ -437,11 +449,19 @@ function getvalue(arr::Array{Variable})
 end
 
 # Dual value (reduced cost) getter
+
+# internal method that doesn't print a warning if the value is NaN
+_getDual(v::Variable) = v.m.redCosts[v.col]
+
+getdualwarn(::Variable) = warn("Variable bound duals (reduced costs) not available. Check that the model was properly solved and no integer variables are present.")
+
 function getdual(v::Variable)
     if length(v.m.redCosts) < MathProgBase.numvar(v.m)
-        error("Variable bound duals (reduced costs) not available. Check that the model was properly solved and no integer variables are present.")
+        getdualwarn(v)
+        NaN
+    else
+        _getDual(v)
     end
-    return v.m.redCosts[v.col]
 end
 
 const var_cats = [:Cont, :Int, :Bin, :SemiCont, :SemiInt]
@@ -541,11 +561,18 @@ LinearConstraint(ref::LinConstrRef) = ref.m.linconstr[ref.idx]::LinearConstraint
 
 linearindex(x::ConstraintRef) = x.idx
 
+# internal method that doesn't print a warning if the value is NaN
+_getDual(c::LinConstrRef) = c.m.linconstrDuals[c.idx]
+
+getdualwarn{T<:Union{ConstraintRef, Int}}(::T) = warn("Dual solution not available. Check that the model was properly solved and no integer variables are present.")
+
 function getdual(c::LinConstrRef)
     if length(c.m.linconstrDuals) != MathProgBase.numlinconstr(c.m)
-        error("Dual solution not available. Check that the model was properly solved and no integer variables are present.")
+        getdualwarn(c)
+        NaN
+    else
+        _getDual(c)
     end
-    return c.m.linconstrDuals[c.idx]
 end
 
 # Returns the number of non-infinity and nonzero bounds on variables
@@ -575,25 +602,127 @@ function getNumBndRows(m::Model)
 end
 
 # Returns the number of second-order cone constraints
-function getNumSOCRows(m::Model)
-    numSOCRows = 0
-    for con in m.socconstr
-        numSOCRows += length(con.normexpr.norm.terms) + 1
+getNumRows(c::SOCConstraint) = length(c.normexpr.norm.terms) + 1
+getNumSOCRows(m::Model) = sum(getNumRows.(m.socconstr))
+
+# Returns the number of rows used by SDP constraints in the MPB conic representation
+# (excluding symmetry constraints)
+#   Julia seems to not be able to infer the return type (probably because c.terms is Any)
+#   so getNumSDPRows tries to call zero(Any)... Using ::Int solves this issue
+function getNumRows(c::SDConstraint)::Int
+    n = size(c.terms, 1)
+    (n * (n+1)) ÷ 2
+end
+getNumSDPRows(m::Model) = sum(getNumRows.(m.sdpconstr))
+
+# Returns the number of symmetry-enforcing constraints for SDP constraints
+function getNumSymRows(m::Model)
+    sum(map(length, m.sdpconstrSym))
+end
+
+# Returns the dual variables corresponding to
+# m.sdpconstr[idx] if issdp is true
+# m.socconstr[idx] if sdp is not true
+function getconicdualaux(m::Model, idx::Int, issdp::Bool)
+    numLinRows = MathProgBase.numlinconstr(m)
+    numBndRows = getNumBndRows(m)
+    numSOCRows = getNumSOCRows(m)
+    numSDPRows = getNumSDPRows(m)
+    numSymRows = getNumSymRows(m)
+    numRows = numLinRows + numBndRows + numSOCRows + numSDPRows + numSymRows
+    if length(m.conicconstrDuals) != numRows
+        # solve might not have been called so m.constrDualMap might be empty
+        getdualwarn(idx)
+        c = issdp ? m.sdpconstr[idx] : m.socconstr[idx]
+        duals = fill(NaN, getNumRows(c))
+        if issdp
+            duals, Float64[]
+        else
+            duals
+        end
+    else
+        offset = numLinRows + numBndRows
+        if issdp
+            offset += length(m.socconstr)
+        end
+        dual = m.conicconstrDuals[m.constrDualMap[offset + idx]]
+        if issdp
+            offset += length(m.sdpconstr)
+            symdual = m.conicconstrDuals[m.constrDualMap[offset + idx]]
+            dual, symdual
+        else
+            dual
+        end
     end
-    return numSOCRows
 end
 
 function getdual(c::ConstraintRef{Model,SOCConstraint})
-    numBndRows = getNumBndRows(c.m)
-    numSOCRows = getNumSOCRows(c.m)
-    if length(c.m.conicconstrDuals) != (MathProgBase.numlinconstr(c.m) + numBndRows + numSOCRows)
-        error("Dual solution not available. Check that the model was properly solved and no integer variables are present.")
-    end
-    return c.m.conicconstrDuals[
-        c.m.constrDualMap[MathProgBase.numlinconstr(c.m) + numBndRows + c.idx]]
+    getconicdualaux(c.m, c.idx, false)
 end
 
-
+# Let S₊ be the cone of symmetric semidefinite matrices in
+# the n*(n+1)/2 dimensional space of symmetric R^{nxn} matrices.
+# It is well known that S₊ is a self-dual proper cone.
+# Let P₊ be the cone of symmetric semidefinite matrices in
+# the n^2 dimensional space of R^{nxn} matrices and
+# let D₊ be the cone of matrices A such that A+Aᵀ ∈ P₊.
+# P₊ is not proper since it is not solid (as it is not n^2 dimensional) so it is not ensured that (P₊)** = P₊
+# However this is the case since, as we will see, (P₊)* = D₊ and (D₊)* = P₊.
+# * Let us first see why (P₊)* = D₊.
+#   If B is symmetric, then ⟨A,B⟩ = ⟨Aᵀ,Bᵀ⟩ = ⟨Aᵀ,B⟩ so 2⟨A,B⟩ = ⟨A,B⟩ + ⟨Aᵀ,B⟩ = ⟨A+Aᵀ,B⟩
+#   Therefore, ⟨A,B⟩ ⩾ 0 for all B ∈ P₊ if and only if ⟨A+Aᵀ,B⟩ ⩾ 0 for all B ∈ P₊
+#   Since A+Aᵀ is symmetric and we know that S₊ is self-dual, we have shown that (P₊)*
+#   is the set of matrices A such that A+Aᵀ is PSD
+# * Let us now see why (D₊)* = P₊.
+#   Since A ∈ D₊ implies that Aᵀ ∈ D₊, B ∈ (D₊)* means that ⟨A+Aᵀ,B⟩ ⩾ 0 for any A ∈ D₊ hence B is positive semi-definite.
+#   To see why it should be symmetric, simply notice that if B[i,j] < B[j,i] then ⟨A,B⟩ can be made arbitrarily small by setting
+#   A[i,j] += s
+#   A[j,i] -= s
+#   with s arbitrarilly large, and A stays in D₊ as A+Aᵀ does not change.
+#
+# Typically, SDP primal/dual are presented as
+# min ⟨C, X⟩                                                                max ∑ b_ky_k
+# ⟨A_k, X⟩ = b_k ∀k                                                         C - ∑ A_ky_k ∈ S₊
+#        X ∈ S₊                                                                      y_k free ∀k
+# Here, as we allow A_i to be non-symmetric, we should rather use
+# min ⟨C, X⟩                                                                max ∑ b_ky_k
+# ⟨A_k, X⟩ = b_k ∀k                                                         C - ∑ A_ky_k ∈ P₊
+#        X ∈ D₊                                                                      y_k free ∀k
+# which is implemented as
+# min ⟨C, Z⟩ + (C[i,j]-C[j-i])s[i,j]                                        max ∑ b_ky_k
+# ⟨A_k, Z⟩ + (A_k[i,j]-A_k[j,i])s[i,j] = b_k ∀k                   C+Cᵀ - ∑ (A_k+A_kᵀ)y_k ∈ S₊
+#       s[i,j] free  1 ⩽ i,j ⩽ n with i > j     C[i,j]-C[j-i] - ∑ (A_k[i,j]-A_k[j,i])y_k = 0  1 ⩽ i,j ⩽ n with i > j
+#        Z ∈ S₊                                                                      y_k free ∀k
+# where "∈ S₊" only look at the diagonal and upper diagonal part.
+# In the last primal program, we have the variables Z = X + Xᵀ and a upper triangular matrix S such that X = Z + S - Sᵀ
+function getdual(c::ConstraintRef{Model,SDConstraint})
+    dual, symdual = getconicdualaux(c.m, c.idx, true)
+    n = size(c.m.sdpconstr[c.idx].terms, 1)
+    X = Matrix{eltype(dual)}(n, n)
+    @assert length(dual) == convert(Int, n*(n+1)/2)
+    idx = 0
+    for i in 1:n
+        for j in i:n
+            idx += 1
+            if i == j
+                X[i,j] = dual[idx]
+            else
+                X[j,i] = X[i,j] = dual[idx] / sqrt(2)
+            end
+        end
+    end
+    if !isempty(symdual)
+        @assert length(symdual) == length(c.m.sdpconstrSym[c.idx])
+        idx = 0
+        for (i,j) in c.m.sdpconstrSym[c.idx]
+            idx += 1
+            s = symdual[idx]
+            X[i,j] -= s
+            X[j,i] += s
+        end
+    end
+    X
+end
 
 function setRHS(c::LinConstrRef, rhs::Number)
     constr = c.m.linconstr[c.idx]
@@ -651,7 +780,7 @@ function Variable(m::Model,lower::Number,upper::Number,cat::Symbol,objcoef::Numb
         if method_exists(MathProgBase.addvar!, (typeof(m.internalModel),Vector{Int},Vector{Float64},Float64,Float64,Float64))
             MathProgBase.addvar!(m.internalModel,Int[c.idx for c in constraints],coefficients,float(lower),float(upper),float(objcoef))
         else
-            Base.warn_once("Solver does not appear to support adding variables to an existing model. Hot-start is disabled.")
+            Base.warn_once("Solver does not appear to support adding variables to an existing model. JuMP's internal model will be discarded.")
             m.internalModelLoaded = false
         end
     end
@@ -662,6 +791,7 @@ end
 # handle dictionary of variables
 function registervar(m::Model, varname::Symbol, value)
     if haskey(m.varDict, varname)
+        Base.warn_once("A variable named $varname is already attached to this model. If creating variables programmatically, consider using the anonymous variable syntax x = @variable(m, [1:N], ...).")
         m.varDict[varname] = nothing # indicate duplicate variable
     else
         m.varDict[varname] = value
@@ -672,7 +802,8 @@ registervar(m::Model, varname, value) = value # variable name isn't a simple sym
 
 function registercon(m::Model, conname::Symbol, value)
     if haskey(m.conDict, conname)
-        m.conDict[conname] = nothing # indicate duplicate variable
+        Base.warn_once("A constraint named $conname is already attached to this model. If creating constraints programmatically, consider using the anonymous constraint syntax con = @constraint(m, ...).")
+        m.conDict[conname] = nothing # indicate duplicate constraint
     else
         m.conDict[conname] = value
     end
@@ -701,13 +832,14 @@ function getconstraint(m::Model, conname::Symbol)
 end
 
 # usage warnings
-function getvalue_warn(x::JuMPContainer{Variable})
+function mapcontainer_warn(f, x::JuMPContainer{Variable})
     isempty(x) && return
     v = first(values(x))
     m = v.m
-    m.getvalue_counter += 1
-    if m.getvalue_counter > 400
-        Base.warn_once("getvalue has been called on a collection of variables a large number of times. For performance reasons, this should be avoided. Instead of getvalue(x)[a,b,c], use getvalue(x[a,b,c]) to avoid temporary allocations.")
+    m.map_counter += 1
+    if m.map_counter > 400
+        # It might not be f that was called the 400 first times but most probably it is f
+        Base.warn_once("$f has been called on a collection of variables a large number of times. For performance reasons, this should be avoided. Instead of $f(x)[a,b,c], use $f(x[a,b,c]) to avoid temporary allocations.")
     end
     return
 end

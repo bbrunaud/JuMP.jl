@@ -41,6 +41,10 @@ Methods
 * ``MathProgBase.numvar(m::Model)`` - returns the number of variables associated with the ``Model m``.
 * ``MathProgBase.numlinconstr(m::Model)`` - returns the number of linear constraints associated with the ``Model m``.
 * ``MathProgBase.numquadconstr(m::Model)`` - returns the number of quadratic constraints associated with the ``Model m``.
+* ``JuMP.numsocconstr(m::Model)`` - returns the number of second order cone constraints associated with the ``Model m``.
+* ``JuMP.numsosconstr(m::Model)`` - returns the number of sos constraints associated with the ``Model m``.
+* ``JuMP.numsdconstr(m::Model)`` - returns the number of semi-definite constraints associated with the ``Model m``.
+* ``JuMP.numnlconstr(m::Model)`` - returns the number of nonlinear constraints associated with the ``Model m``.
 * ``MathProgBase.numconstr(m::Model)`` - returns the total number of constraints associated with the ``Model m``.
 * ``getsolvetime(m::Model)`` - returns the solve time reported by the solver if it is implemented.
 * ``getnodecount(m::Model)`` - returns the number of explored branch-and-bound nodes, if it is implemented.
@@ -65,7 +69,7 @@ Methods
 
 **Output**
 
-* ``writeLP(m::Model, filename::AbstractString)`` - write the model to ``filename`` in the LP file format.
+* ``writeLP(m::Model, filename::AbstractString; genericnames=true)`` - write the model to ``filename`` in the LP file format. Set ``genericnames=false`` for user-defined variable names.
 * ``writeMPS(m::Model, filename::AbstractString)`` - write the model to ``filename`` in the MPS file format.
 
 .. _solvestatus:
@@ -119,9 +123,9 @@ Second-order cone constraints of the form :math:`||Ax-b||_2 + a^Tx + c \le 0` ca
 
     @constraint(m, norm(A*x) <= 2w - 1)
 
-The special ``norm2{...}`` construct may be used to build up normed expressions with complex indexing operations in much the same way as the ``sum{...}`` construct::
+You may use generator expressions within ``norm()`` to build up normed expressions with complex indexing operations in much the same way as with ``sum(...)``::
 
-    @constraint(m, norm2{2x[i] - i, i=1:n; c[i] == 1} <= 1)
+    @constraint(m, norm(2x[i] - i for i=1:n if c[i] == 1) <= 1)
 
 Accessing the low-level model
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

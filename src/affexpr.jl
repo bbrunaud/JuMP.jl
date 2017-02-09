@@ -99,8 +99,14 @@ function setobjective(m::Model, sense::Symbol, a::AffExpr)
         # A better approach would be to update and reuse the evaluator
         m.internalModelLoaded = false
     end
-    setobjectivesense(m, sense)
-    m.obj = convert(QuadExpr,a)
+    if length(m.obj.qvars1) != 0
+        # Go through the quadratic path so that we properly clear
+        # current quadratic terms.
+        setobjective(m, sense, convert(QuadExpr,a))
+    else
+        setobjectivesense(m, sense)
+        m.obj = convert(QuadExpr,a)
+    end
 end
 
 # Copy an affine expression to a new model by converting all the
@@ -169,7 +175,7 @@ function addconstraint(m::Model, c::LinearConstraint)
             indices, coeffs = merge_duplicates(Cint, c.terms, m.indexedVector, m)
             MathProgBase.addconstr!(m.internalModel,indices,coeffs,c.lb,c.ub)
         else
-            Base.warn_once("Solver does not appear to support adding constraints to an existing model. Hot-start is disabled.")
+            Base.warn_once("Solver does not appear to support adding constraints to an existing model. JuMP's internal model will be discarded.")
             m.internalModelLoaded = false
         end
     end
