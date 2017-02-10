@@ -25,7 +25,7 @@ export
 # Objects
     Model, Variable, Norm, AffExpr, QuadExpr, SOCExpr,
     LinearConstraint, QuadConstraint, SDConstraint, SOCConstraint,
-    NonlinearConstraint,
+    NonlinearConstraint, IndicatorConstraint,
     ConstraintRef,
 # Functions
     # Model related
@@ -68,6 +68,7 @@ type Model <: AbstractModel
     sosconstr
     socconstr
     sdpconstr
+    indconstr
 
     # Column data
     numCols::Int
@@ -150,6 +151,7 @@ function Model(;solver=UnsetSolver(), simplify_nonlinear_expressions::Bool=false
           SOSConstraint[],             # sosconstr
           SOCConstraint[],             # socconstr
           SDConstraint[],              # sdpconstr
+          IndicatorConstraint[],       # indconstr 
           0,                           # numCols
           String[],                    # colNames
           String[],                    # colNamesIJulia
@@ -518,6 +520,10 @@ include("norms.jl")
 ##########################################################################
 # SOSConstraint  (special ordered set constraints)
 include("sos.jl")
+
+##########################################################################
+# IndicatorConstraint  (Indicator constraints  y = 1 => ax <= b)
+include("indicator.jl")
 
 ##########################################################################
 # SDConstraint is a (dual) semidefinite constraint of the form
@@ -895,7 +901,7 @@ Base.ndims(::JuMPTypes) = 0
 include("operators.jl")
 # Writers - we support MPS (MILP + QuadObj), LP (MILP)
 include("writers.jl")
-# Macros - @defVar, sum{}, etc.
+# Macros - @variable, @constraint, sum(), etc.
 include("macros.jl")
 # Solvers
 include("solvers.jl")

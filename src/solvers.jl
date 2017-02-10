@@ -24,6 +24,7 @@ type ProblemTraits
     soc::Bool  # has a second-order cone constraint
     sdp::Bool  # has an SDP constraint (or SDP variable bounds)
     sos::Bool  # has an SOS constraint
+    ind::Bool  # has an indicator constraint
     conic::Bool  # has an SDP or SOC constraint
 end
 function ProblemTraits(m::Model; relaxation=false)
@@ -35,12 +36,13 @@ function ProblemTraits(m::Model; relaxation=false)
     # will need to change this when we add support for arbitrary variable cones
     sdp = !isempty(m.sdpconstr) || !isempty(m.varCones)
     sos = !isempty(m.sosconstr)
-    ProblemTraits(int, !(qp|qc|nlp|soc|sdp|sos), qp, qc, nlp, soc, sdp, sos, soc|sdp)
+    ind = !isempty(m.indconstr)
+    ProblemTraits(int, !(qp|qc|nlp|soc|sdp|sos|ind), qp, qc, nlp, soc, sdp, sos, ind, soc|sdp)
 end
 function default_solver(traits::ProblemTraits)
     if traits.nlp
         MathProgBase.defaultNLPsolver
-    elseif traits.int || traits.sos
+    elseif traits.int || traits.sos || traits.ind
         MathProgBase.defaultMIPsolver
     elseif traits.sdp
         MathProgBase.defaultSDPsolver
@@ -148,7 +150,7 @@ function solve(m::Model; suppress_warnings=false,
     m.colVal = fill(NaN, numCols)
     m.linconstrDuals = Array(Float64, 0)
 
-    discrete = !relaxation && (traits.int || traits.sos)
+    discrete = !relaxation && (traits.int || traits.sos || traits.ind)
     if stat == :Optimal
         # If we think dual information might be available, try to get it
         # If not, return an array of the correct length
@@ -389,6 +391,7 @@ function build(m::Model; suppress_warnings=false, relaxation=false, traits=Probl
             addQuadratics(m)
             if !relaxation
                 addSOS(m)
+                addIndicators(m)
             end
         end
 
@@ -499,6 +502,18 @@ function addSOS(m::Model)
             else
                 error("Solver does not support SOS constraints")
             end
+        end
+    end
+end
+
+function addIndicators(m::Model)
+    for i in 1:length(m.indconstr)
+        ind = m.indconstr[i]
+        indices, coeffs = merge_duplicates(Cint, ind.linconstraint.terms, ind.indexedVector, m)
+        if applicable(MathProgBase.addindconstr!, ind.binvar.col, ind.binvalue, indices, coeffs, ind.linconstraint.lb, ind.linconstraint.ub)
+            MathProgBase.addindconstr!(ind.binvar.col, ind.binvalue, indices, coeffs, ind.linconstraint.lb, ind.linconstraint.ub)
+        else
+            error("Solver does not support indicator constraints")
         end
     end
 end
