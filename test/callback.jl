@@ -231,6 +231,55 @@ using Base.Test
         @test find(getvalue(x)) == setdiff(1:N,[9,10,11,14,15,16,25,30,32,41,44,49,50,53,54,98,100])
     end
 
+<<<<<<< HEAD
+facts("[callback] Test informational callback") do
+for infosolver in info_solvers
+context("With solver $(typeof(infosolver))") do
+    nodes      = Int[]
+    objs       = Float64[]
+    objvals    = Float64[]
+    bestbounds = Float64[]
+    entered = fill(false, 2)
+
+    N = 10000
+    include(joinpath("data","informational.jl"))
+    mod = Model(solver=infosolver)
+    @variable(mod, x[1:N], Bin)
+    @objective(mod, Max, dot(r1,x))
+    @constraint(mod, c[i=1:10], dot(r2[i],x) <= rhs[i]*N/10)
+    # Test that solver fills solution correctly
+    function myinfo1(cb)
+        @assert MathProgBase.cbgetstate(cb) == :Intermediate
+        entered[1] = true
+        push!(nodes,      MathProgBase.cbgetexplorednodes(cb))
+        push!(objs,       MathProgBase.cbgetobj(cb))
+        push!(bestbounds, MathProgBase.cbgetbestbound(cb))
+    end
+    function myinfo2(cb)
+        @assert MathProgBase.cbgetstate(cb) == :MIPSol
+        push!(objvals, dot(r1,JuMP.getvalue(x[:])))
+    end
+    addinfocallback(mod, myinfo1, when = :Intermediate)
+    addinfocallback(mod, myinfo2, when = :MIPSol)
+    addinfocallback(mod, cb -> (entered[2] = true), when = :Intermediate)
+    @fact solve(mod) --> :Optimal
+    @fact entered --> fill(true, 2)
+    mono_node, mono_obj, mono_bestbound = true, true, true
+    for n in 2:length(nodes)
+        mono_node &= (nodes[n-1] <= nodes[n] + 1e-8)
+        if nodes[n] > 0 # all bets are off at monotonicity at root node
+            mono_obj &= (objs[n-1] <= objs[n] + 1e-8)
+            mono_bestbound &= (bestbounds[n-1] >= bestbounds[n] - 1e-8)
+        end
+    end
+    @fact mono_node      --> true
+    @fact mono_obj       --> true
+    @fact mono_bestbound --> true
+    for (s1,s2) in zip(objvals[1:end-1], objvals[2:end])
+        @fact  s1 <= s2 --> true
+    end
+end; end; end
+=======
     @testset "Informational callback with $infosolver" for infosolver in info_solvers
         nodes      = Int[]
         objs       = Float64[]
@@ -276,6 +325,7 @@ using Base.Test
             @test s1 <= s2
         end
     end
+>>>>>>> 9bef25fe7b64492fc0343f5bd3737d02a92cef24
 
     # throw CallbackAbort is somewhat broken on OS X due to upstream Julia issue
     # https://github.com/JuliaOpt/Gurobi.jl/issues/47
@@ -304,6 +354,22 @@ using Base.Test
         @test solve(mod, suppress_warnings=true) == :UserLimit
     end
 
+<<<<<<< HEAD
+cbc && facts("[callback] Solver doesn't support callbacks") do
+    mycb(cb) = nothing
+    mod = Model(solver=Cbc.CbcSolver())
+    addlazycallback(mod, mycb)
+    @fact_throws ErrorException solve(mod)
+    mod = Model(solver=Cbc.CbcSolver())
+    addcutcallback(mod, mycb)
+    @fact_throws ErrorException solve(mod)
+    mod = Model(solver=Cbc.CbcSolver())
+    addheuristiccallback(mod, mycb)
+    @fact_throws ErrorException solve(mod)
+    mod = Model(solver=Cbc.CbcSolver())
+    addinfocallback(mod, mycb, when = :Intermediate)
+    @fact_throws ErrorException solve(mod)
+=======
     if cbc
         @testset "Solver doesn't support callbacks" begin
             mycb(cb) = nothing
@@ -321,4 +387,5 @@ using Base.Test
             @test_throws ErrorException solve(mod)
         end
     end
+>>>>>>> 9bef25fe7b64492fc0343f5bd3737d02a92cef24
 end
