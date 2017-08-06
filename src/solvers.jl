@@ -70,15 +70,9 @@ function no_solver_error(traits::ProblemTraits)
 
     # This is pretty coarse and misses out on MIConic, MIQP, etc.
     if traits.nlp
-<<<<<<< HEAD
         class = "NLP"
-    elseif traits.int || traits.sos
-        class = "MIP"
-=======
-        MathProgBase.defaultNLPsolver
     elseif traits.int || traits.sos || traits.ind
-        MathProgBase.defaultMIPsolver
->>>>>>> bbrunaud/indconstr
+        class = "MIP"
     elseif traits.sdp
         class = "SDP"
     elseif traits.conic
@@ -309,8 +303,8 @@ end
 
 
 """
-    build(m::Model; suppress_warnings=false, 
-        relaxation=false, 
+    build(m::Model; suppress_warnings=false,
+        relaxation=false,
         traits=ProblemTraits(m,relaxation=relaxation))
 
 builds the model in memory at the MathProgBase level without optimizing.
@@ -396,6 +390,7 @@ function build(m::Model; suppress_warnings=false, relaxation=false, traits=Probl
             if !relaxation
                 addSOS(m)
                 addIndicators(m)
+                # Indicators are excluded when the relaxation is solved. Maybe BigM constraints would be required instead.
             end
         end
 

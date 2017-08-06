@@ -25,7 +25,7 @@ export
 # Objects
     Model, Variable, Norm, AffExpr, QuadExpr, SOCExpr,
     LinearConstraint, QuadConstraint, SDConstraint, SOCConstraint,
-    NonlinearConstraint, IndicatorConstraint,
+    NonlinearConstraint,
     ConstraintRef,
 # Cones
     PSDCone,
@@ -67,9 +67,9 @@ type Model <: AbstractModel
     linconstr#::Vector{LinearConstraint}
     quadconstr
     sosconstr
+    indconstr
     socconstr
     sdpconstr
-    indconstr
 
     # Column data
     numCols::Int
@@ -151,9 +151,9 @@ function Model(;solver=UnsetSolver(), simplify_nonlinear_expressions::Bool=false
           LinearConstraint[],          # linconstr
           QuadConstraint[],            # quadconstr
           SOSConstraint[],             # sosconstr
+          IndicatorConstraint[],       # indconstr
           SOCConstraint[],             # socconstr
           SDConstraint[],              # sdpconstr
-          IndicatorConstraint[],       # indconstr 
           0,                           # numCols
           String[],                    # colNames
           String[],                    # colNamesIJulia
@@ -754,55 +754,8 @@ include("norms.jl")
 include("sos.jl")
 
 ##########################################################################
-<<<<<<< HEAD
 # SDConstraint
 include("sd.jl")
-=======
-# IndicatorConstraint  (Indicator constraints  y = 1 => ax <= b)
-include("indicator.jl")
-
-##########################################################################
-# SDConstraint is a (dual) semidefinite constraint of the form
-# ∑ cᵢ Xᵢ ≥ D, where D is a n×n symmetric data matrix, cᵢ are
-# scalars, and Xᵢ are n×n symmetric variable matrices. The inequality
-# is taken w.r.t. the psd partial order.
-type SDConstraint <: AbstractConstraint
-    terms
-end
-
-# Special-case X ≥ 0, which is often convenient
-function SDConstraint(lhs::Matrix, rhs::Number)
-    rhs == 0 || error("Cannot construct a semidefinite constraint with nonzero scalar bound $rhs")
-    SDConstraint(lhs)
-end
-
-function addconstraint(m::Model, c::SDConstraint)
-    push!(m.sdpconstr,c)
-    m.internalModelLoaded = false
-    ConstraintRef{Model,SDConstraint}(m,length(m.sdpconstr))
-end
-
-# helper method for mapping going on below
-Base.copy(x::Number, new_model::Model) = copy(x)
-
-Base.copy(c::SDConstraint, new_model::Model) =
-    SDConstraint(map(t -> copy(t, new_model), c.terms))
-
-
-##########################################################################
-# ConstraintRef
-# Reference to a constraint for retrieving solution info
-immutable ConstraintRef{M<:AbstractModel,T<:AbstractConstraint}
-    m::M
-    idx::Int
-end
-
-typealias LinConstrRef ConstraintRef{Model,LinearConstraint}
-
-LinearConstraint(ref::LinConstrRef) = ref.m.linconstr[ref.idx]::LinearConstraint
-
-linearindex(x::ConstraintRef) = x.idx
->>>>>>> bbrunaud/indconstr
 
 # internal method that doesn't print a warning if the value is NaN
 _getDual(c::LinConstrRef) = c.m.linconstrDuals[c.idx]
@@ -1076,8 +1029,10 @@ Base.ndims(::JuMPTypes) = 0
 include("operators.jl")
 # Writers - we support MPS (MILP + QuadObj), LP (MILP)
 include("writers.jl")
-# Macros - @variable, @constraint, sum(), etc.
+# Macros - @defVar, sum{}, etc.
 include("macros.jl")
+# Indicator Constraints
+include("indicator.jl")
 # Solvers
 include("solvers.jl")
 # Callbacks - lazy, cuts, ...
