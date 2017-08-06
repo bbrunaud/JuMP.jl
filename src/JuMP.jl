@@ -187,14 +187,61 @@ function Model(;solver=UnsetSolver(), simplify_nonlinear_expressions::Bool=false
 end
 
 # Getters/setters
+
+"""
+    MathProgBase.numvar(m::Model)
+
+returns the number of variables associated with the `Model m`.
+"""
 MathProgBase.numvar(m::Model) = m.numCols
+
+"""
+    MathProgBase.numlinconstr(m::Model)
+
+returns the number of linear constraints associated with the `Model m`
+"""
 MathProgBase.numlinconstr(m::Model) = length(m.linconstr)
+
+"""
+    MathProgBase.numquadconstr(m::Model)
+
+returns the number of quadratic constraints associated with the `Model m`
+"""
 MathProgBase.numquadconstr(m::Model) = length(m.quadconstr)
+
+"""
+    numsocconstr(m::Model)
+
+returns the number of second order cone constraints associated with the `Model m`
+"""
 numsocconstr(m::Model) = length(m.socconstr)
+
+"""
+    numsosconstr(m::Model)
+
+returns the number of sos constraints associated with the `Model m`
+"""
 numsosconstr(m::Model) = length(m.sosconstr)
+
+"""
+    numsdconstr(m::Model)
+
+returns the number of semi-definite constraints associated with the `Model m`
+"""
 numsdconstr(m::Model) = length(m.sdpconstr)
+
+"""
+    numnlconstr(m::Model)
+
+returns the number of nonlinear constraints associated with the `Model m`
+"""
 numnlconstr(m::Model) = m.nlpdata !== nothing ? length(m.nlpdata.nlconstr) : 0
 
+"""
+    MathProgBase.numconstr(m::Model)
+
+returns the total number of constraints associated with the `Model m`
+"""
 function MathProgBase.numconstr(m::Model)
     c = length(m.linconstr) + length(m.quadconstr) + length(m.socconstr) + length(m.sosconstr) + length(m.sdpconstr)
     if m.nlpdata !== nothing
@@ -216,6 +263,58 @@ for f in MathProgBase.SolverInterface.methods_by_tag[:rewrap]
     eval(Expr(:export,f))
 end
 
+
+# Doc strings for the auto-wrapped MPB functions above
+# it would be preferable to problematically use the docstrings from MPB functions instead
+
+@doc """
+    getsolvetime(m::Model)
+
+returns the solve time reported by the solver if it is implemented.
+""" getsolvetime(m::Model)
+
+@doc """
+    getnodecount(m::Model)
+
+returns the number of explored branch-and-bound nodes, if it is implemented.
+""" getnodecount(m::Model)
+
+@doc """
+    getobjbound(m::Model)
+
+returns the best known bound on the optimal objective value. This is used, for example, when a branch-and-bound method is stopped before finishing.
+""" getobjbound(m::Model)
+
+@doc """
+    getobjgap(m::Model)
+
+returns the final relative optimality gap as optimization terminated. That is, it returns ``\\frac{|b-f|}{|f|}``, where *b* is the best bound and *f* is the best feasible objective value.
+""" getobjgap(m::Model)
+
+@doc """
+    getrawsolver(m::Model)
+
+returns an object that may be used to access a solver-specific API.
+""" getrawsolver(m::Model)
+
+@doc """
+    getsimplexiter(m::Model)
+
+returns the cumulative number of simplex iterations during the optimization process. In particular, for a MIP it returns the total simplex iterations for all nodes.
+""" getsimplexiter(m::Model)
+
+@doc """
+    getbarrieriter(m::Model)
+
+returns the cumulative number of barrier iterations during the optimization process.
+""" getbarrieriter(m::Model)
+
+
+"""
+    getobjective(m::Model)
+
+returns the objective function as a `QuadExpr`
+"""
 function getobjective(m::Model)
     traits = ProblemTraits(m)
     if traits.nlp
@@ -224,9 +323,32 @@ function getobjective(m::Model)
     return m.obj
 end
 
+"""
+    getobjectivebound(m::Model)
+
+returns the best known bound on the optimal objective value after a call to `solve`
+"""
 getobjectivebound(m::Model) = m.objBound
+
+"""
+    getobjectivevalue(m::Model)
+
+returns objective value after a call to `solve`
+"""
 getobjectivevalue(m::Model) = m.objVal
+
+"""
+    getobjectivesense(m::Model)
+
+returns objective sense, either `:Min` or `:Max`
+"""
 getobjectivesense(m::Model) = m.objSense
+
+"""
+    setobjectivesense(m::Model, newSense::Symbol)
+
+sets the objective sense (`newSense` is either `:Min` or `:Max`)
+"""
 function setobjectivesense(m::Model, newSense::Symbol)
     if (newSense != :Max && newSense != :Min)
         error("Model sense must be :Max or :Min")
@@ -239,12 +361,18 @@ setobjective(m::Model, something::Any) =
 setobjective(::Model, ::Symbol, x::AbstractArray) =
     error("in setobjective: array of size $(_size(x)) passed as objective; only scalar objectives are allowed")
 
+"""
+    setsolver(m::Model, solver::MathProgBase.AbstractMathProgSolver)
+
+changes the solver which will be used for the next call to `solve()`, discarding the current internal model if present.
+"""
 function setsolver(m::Model, solver::MathProgBase.AbstractMathProgSolver)
     m.solver = solver
     m.internalModel = nothing
     m.internalModelLoaded = false
     nothing
 end
+
 # Deep copy the model
 function Base.copy(source::Model)
 
@@ -312,6 +440,11 @@ function Base.copy(source::Model)
     return dest
 end
 
+"""
+    internalmodel(m::Model)
+
+returns the internal low-level `AbstractMathProgModel` object which can be used to access any functionality that is not exposed by JuMP. See the MathProgBase [documentation](https://mathprogbasejl.readthedocs.org/en/latest/)
+"""
 internalmodel(m::Model) = m.internalModel
 
 setsolvehook(m::Model, f) = (m.solvehook = f)
@@ -374,28 +507,74 @@ function Variable(m::Model,lower::Number,upper::Number,cat::Symbol,name::Abstrac
     return Variable(m, m.numCols)
 end
 
+
 # Name setter/getters
+"""
+    setname(v::Variable,n::AbstractString)
+
+Set the variable's internal name.
+"""
 function setname(v::Variable,n::AbstractString)
     push!(v.m.customNames, v)
     v.m.colNames[v.col] = n
     v.m.colNamesIJulia[v.col] = n
 end
+
+"""
+    getname(m::Model, col)
+
+Get the variable's internal name.
+"""
 getname(m::Model, col) = var_str(REPLMode, m, col)
+
+"""
+    getname(v::Variable)
+
+Get the variable's internal name.
+"""
 getname(v::Variable) = var_str(REPLMode, v.m, v.col)
 
+
 # Bound setter/getters
+"""
+    setlowerbound(v::Variable,lower::Number)
+
+set the lower bound of a variable.
+"""
 function setlowerbound(v::Variable,lower::Number)
     v.m.colCat[v.col] == :Fixed && error("use setvalue for changing the value of a fixed variable")
     v.m.colLower[v.col] = lower
 end
+
+"""
+    setupperbound(v::Variable,upper::Number)
+
+set the upper bound of a variable.
+"""
 function setupperbound(v::Variable,upper::Number)
     v.m.colCat[v.col] == :Fixed && error("use setvalue for changing the value of a fixed variable")
     v.m.colUpper[v.col] = upper
 end
+
+"""
+    getlowerbound(v::Variable)
+
+get the lower bound of a variable.
+"""
 getlowerbound(v::Variable) = v.m.colLower[v.col]
+
+"""
+    getupperbound(v::Variable)
+
+get the upper bound of a variable.
+"""
 getupperbound(v::Variable) = v.m.colUpper[v.col]
 
-# Value setter/getter
+"""
+    setvalue(v::Variable, val::Number)
+
+Provide an initial value `v` for this variable that can be used by supporting MILP solvers. If `v` is `NaN`, the solver may attempt to fill in this value to construct a feasible solution. `setvalue` cannot be used with fixed variables; instead their value may be set with `JuMP.fix(x,v)`
+"""
 function setvalue(v::Variable, val::Number)
     v.m.colVal[v.col] = val
     if v.m.colCat[v.col] == :Fixed
@@ -416,6 +595,11 @@ _getValue(v::Variable) = v.m.colVal[v.col]
 
 getvaluewarn(v) = Base.warn("Variable value not defined for $(getname(v)). Check that the model was properly solved.")
 
+"""
+    getvalue(v::Variable)
+
+Get the value of this variable in the solution.
+"""
 function getvalue(v::Variable)
     ret = _getValue(v)
     if isnan(ret)
@@ -424,6 +608,11 @@ function getvalue(v::Variable)
     ret
 end
 
+"""
+    getvalue(arr::Array{Variable})
+
+Returns an indexable dictionary of values. When the model is unbounded, returns the corresponding components of an unbounded ray, if available from the solver.
+"""
 function getvalue(arr::Array{Variable})
     ret = similar(arr, Float64)
     # return immediately for empty array
@@ -462,6 +651,11 @@ _getDual(v::Variable) = v.m.redCosts[v.col]
 
 getdualwarn(::Variable) = warn("Variable bound duals (reduced costs) not available. Check that the model was properly solved and no integer variables are present.")
 
+"""
+    getdual(v::Variable)
+
+Get the reduced cost of this variable in the solution. Similar behavior to `getvalue` for indexable variables.
+"""
 function getdual(v::Variable)
     if length(v.m.redCosts) < MathProgBase.numvar(v.m)
         getdualwarn(v)
@@ -472,11 +666,22 @@ function getdual(v::Variable)
 end
 
 const var_cats = [:Cont, :Int, :Bin, :SemiCont, :SemiInt]
+
+"""
+    setcategory(v::Variable, cat::Symbol)
+
+Set the variable category for `v` after construction. Possible categories are `:Cont, :Int, :Bin, :SemiCont, :SemiInt`.
+"""
 function setcategory(v::Variable, cat::Symbol)
     cat in var_cats || error("Unrecognized variable category $cat. Should be one of:\n    $var_cats")
     v.m.colCat[v.col] = cat
 end
 
+"""
+    getcategory(v::Variable)
+
+Get the variable category for `v`
+"""
 getcategory(v::Variable) = v.m.colCat[v.col]
 
 Base.zero(::Type{Variable}) = AffExpr(Variable[],Float64[],0.0)
@@ -511,10 +716,25 @@ function Base.copy(d::JuMPContainer, new_model::Model)
     new_d
 end
 
+##########################################################################
+# ConstraintRef
+# Reference to a constraint for retrieving solution info
+immutable ConstraintRef{M<:AbstractModel,T<:AbstractConstraint}
+    m::M
+    idx::Int
+end
+Base.copy{M,T}(c::ConstraintRef{M,T}, new_model::M) = ConstraintRef{M,T}(new_model, c.idx)
+
+linearindex(x::ConstraintRef) = x.idx
+
 ###############################################################################
 # GenericAffineExpression, AffExpr
 # GenericRangeConstraint, LinearConstraint
 include("affexpr.jl")
+
+const LinConstrRef = ConstraintRef{Model,LinearConstraint}
+
+LinearConstraint(ref::LinConstrRef) = ref.m.linconstr[ref.idx]::LinearConstraint
 
 ###############################################################################
 # GenericQuadExpr, QuadExpr
@@ -531,57 +751,19 @@ include("norms.jl")
 # SOSConstraint  (special ordered set constraints)
 include("sos.jl")
 
-# Used in @constraint m X in SDP
-immutable PSDCone end
-
 ##########################################################################
-# SDConstraint is a (dual) semidefinite constraint of the form
-# ∑ cᵢ Xᵢ ≥ D, where D is a n×n symmetric data matrix, cᵢ are
-# scalars, and Xᵢ are n×n symmetric variable matrices. The inequality
-# is taken w.r.t. the psd partial order.
-type SDConstraint <: AbstractConstraint
-    terms
-end
-
-# Special-case X ≥ 0, which is often convenient
-function SDConstraint(lhs::AbstractMatrix, rhs::Number)
-    rhs == 0 || error("Cannot construct a semidefinite constraint with nonzero scalar bound $rhs")
-    SDConstraint(lhs)
-end
-
-function addconstraint(m::Model, c::SDConstraint)
-    push!(m.sdpconstr,c)
-    m.internalModelLoaded = false
-    ConstraintRef{Model,SDConstraint}(m,length(m.sdpconstr))
-end
-
-# helper method for mapping going on below
-Base.copy(x::Number, new_model::Model) = copy(x)
-
-Base.copy(c::SDConstraint, new_model::Model) =
-    SDConstraint(map(t -> copy(t, new_model), c.terms))
-
-
-##########################################################################
-# ConstraintRef
-# Reference to a constraint for retrieving solution info
-immutable ConstraintRef{M<:AbstractModel,T<:AbstractConstraint}
-    m::M
-    idx::Int
-end
-Base.copy{M,T}(c::ConstraintRef{M,T}, new_model::M) = ConstraintRef{M,T}(new_model, c.idx)
-
-const LinConstrRef = ConstraintRef{Model,LinearConstraint}
-
-LinearConstraint(ref::LinConstrRef) = ref.m.linconstr[ref.idx]::LinearConstraint
-
-linearindex(x::ConstraintRef) = x.idx
+# SDConstraint
+include("sd.jl")
 
 # internal method that doesn't print a warning if the value is NaN
 _getDual(c::LinConstrRef) = c.m.linconstrDuals[c.idx]
 
 getdualwarn{T<:Union{ConstraintRef, Int}}(::T) = warn("Dual solution not available. Check that the model was properly solved and no integer variables are present.")
 
+"""
+    getdual(c::LinConstrRef)
+
+"""
 function getdual(c::LinConstrRef)
     if length(c.m.linconstrDuals) != MathProgBase.numlinconstr(c.m)
         getdualwarn(c)
@@ -621,21 +803,6 @@ end
 getNumRows(c::SOCConstraint) = length(c.normexpr.norm.terms) + 1
 getNumSOCRows(m::Model) = sum(getNumRows.(m.socconstr))
 
-# Returns the number of rows used by SDP constraints in the MPB conic representation
-# (excluding symmetry constraints)
-#   Julia seems to not be able to infer the return type (probably because c.terms is Any)
-#   so getNumSDPRows tries to call zero(Any)... Using ::Int solves this issue
-function getNumRows(c::SDConstraint)::Int
-    n = size(c.terms, 1)
-    (n * (n+1)) ÷ 2
-end
-getNumSDPRows(m::Model) = sum(getNumRows.(m.sdpconstr))
-
-# Returns the number of symmetry-enforcing constraints for SDP constraints
-function getNumSymRows(m::Model)
-    sum(map(length, m.sdpconstrSym))
-end
-
 # Returns the dual variables corresponding to
 # m.sdpconstr[idx] if issdp is true
 # m.socconstr[idx] if sdp is not true
@@ -672,72 +839,13 @@ function getconicdualaux(m::Model, idx::Int, issdp::Bool)
     end
 end
 
+"""
+    getdual(c::ConstraintRef{Model,SOCConstraint})
+
+
+"""
 function getdual(c::ConstraintRef{Model,SOCConstraint})
     getconicdualaux(c.m, c.idx, false)
-end
-
-# Let S₊ be the cone of symmetric semidefinite matrices in
-# the n*(n+1)/2 dimensional space of symmetric R^{nxn} matrices.
-# It is well known that S₊ is a self-dual proper cone.
-# Let P₊ be the cone of symmetric semidefinite matrices in
-# the n^2 dimensional space of R^{nxn} matrices and
-# let D₊ be the cone of matrices A such that A+Aᵀ ∈ P₊.
-# P₊ is not proper since it is not solid (as it is not n^2 dimensional) so it is not ensured that (P₊)** = P₊
-# However this is the case since, as we will see, (P₊)* = D₊ and (D₊)* = P₊.
-# * Let us first see why (P₊)* = D₊.
-#   If B is symmetric, then ⟨A,B⟩ = ⟨Aᵀ,Bᵀ⟩ = ⟨Aᵀ,B⟩ so 2⟨A,B⟩ = ⟨A,B⟩ + ⟨Aᵀ,B⟩ = ⟨A+Aᵀ,B⟩
-#   Therefore, ⟨A,B⟩ ⩾ 0 for all B ∈ P₊ if and only if ⟨A+Aᵀ,B⟩ ⩾ 0 for all B ∈ P₊
-#   Since A+Aᵀ is symmetric and we know that S₊ is self-dual, we have shown that (P₊)*
-#   is the set of matrices A such that A+Aᵀ is PSD
-# * Let us now see why (D₊)* = P₊.
-#   Since A ∈ D₊ implies that Aᵀ ∈ D₊, B ∈ (D₊)* means that ⟨A+Aᵀ,B⟩ ⩾ 0 for any A ∈ D₊ hence B is positive semi-definite.
-#   To see why it should be symmetric, simply notice that if B[i,j] < B[j,i] then ⟨A,B⟩ can be made arbitrarily small by setting
-#   A[i,j] += s
-#   A[j,i] -= s
-#   with s arbitrarilly large, and A stays in D₊ as A+Aᵀ does not change.
-#
-# Typically, SDP primal/dual are presented as
-# min ⟨C, X⟩                                                                max ∑ b_ky_k
-# ⟨A_k, X⟩ = b_k ∀k                                                         C - ∑ A_ky_k ∈ S₊
-#        X ∈ S₊                                                                      y_k free ∀k
-# Here, as we allow A_i to be non-symmetric, we should rather use
-# min ⟨C, X⟩                                                                max ∑ b_ky_k
-# ⟨A_k, X⟩ = b_k ∀k                                                         C - ∑ A_ky_k ∈ P₊
-#        X ∈ D₊                                                                      y_k free ∀k
-# which is implemented as
-# min ⟨C, Z⟩ + (C[i,j]-C[j-i])s[i,j]                                        max ∑ b_ky_k
-# ⟨A_k, Z⟩ + (A_k[i,j]-A_k[j,i])s[i,j] = b_k ∀k                   C+Cᵀ - ∑ (A_k+A_kᵀ)y_k ∈ S₊
-#       s[i,j] free  1 ⩽ i,j ⩽ n with i > j     C[i,j]-C[j-i] - ∑ (A_k[i,j]-A_k[j,i])y_k = 0  1 ⩽ i,j ⩽ n with i > j
-#        Z ∈ S₊                                                                      y_k free ∀k
-# where "∈ S₊" only look at the diagonal and upper diagonal part.
-# In the last primal program, we have the variables Z = X + Xᵀ and a upper triangular matrix S such that X = Z + S - Sᵀ
-function getdual(c::ConstraintRef{Model,SDConstraint})
-    dual, symdual = getconicdualaux(c.m, c.idx, true)
-    n = size(c.m.sdpconstr[c.idx].terms, 1)
-    X = Matrix{eltype(dual)}(n, n)
-    @assert length(dual) == convert(Int, n*(n+1)/2)
-    idx = 0
-    for i in 1:n
-        for j in i:n
-            idx += 1
-            if i == j
-                X[i,j] = dual[idx]
-            else
-                X[j,i] = X[i,j] = dual[idx] / sqrt(2)
-            end
-        end
-    end
-    if !isempty(symdual)
-        @assert length(symdual) == length(c.m.sdpconstrSym[c.idx])
-        idx = 0
-        for (i,j) in c.m.sdpconstrSym[c.idx]
-            idx += 1
-            s = symdual[idx]
-            X[i,j] -= s
-            X[j,i] += s
-        end
-    end
-    X
 end
 
 function setRHS(c::LinConstrRef, rhs::Number)
@@ -825,7 +933,13 @@ function registerobject(m::Model, name::Symbol, value, warnstring::String)
     return value
 end
 
-# allow easy accessing of JuMP Variables and Constraints
+
+"""
+    Base.getindex(m::JuMP.Model, name::Symbol)
+
+To allow easy accessing of JuMP Variables and Constraints via `[]` syntax.
+Returns the variable, or group of variables, or constraint, or group of constraints, of the given name which were added to the model. This errors if multiple variables or constraints share the same name.
+"""
 function Base.getindex(m::JuMP.Model, name::Symbol)
     if !haskey(m.objDict, name)
         throw(KeyError("No object with name $name"))
@@ -835,6 +949,12 @@ function Base.getindex(m::JuMP.Model, name::Symbol)
         return m.objDict[name]
     end
 end
+
+"""
+    Base.setindex!(m::JuMP.Model, value, name::Symbol)
+
+stores the object `value` in the model `m` using so that it can be accessed via `getindex`.  Can be called with `[]` syntax.
+"""
 function Base.setindex!(m::JuMP.Model, value, name::Symbol)
     # if haskey(m.objDict, name)
     #     warn("Overwriting the object $name stored in the model. Consider using anonymous variables and constraints instead")
