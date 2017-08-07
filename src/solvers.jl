@@ -512,10 +512,10 @@ end
 function addIndicators(m::Model)
     for i in 1:length(m.indconstr)
         ind = m.indconstr[i]
-        indices, coeffs = merge_duplicates(Cint, ind.linconstraint.terms, ind.indexedVector, m)
-        if applicable(MathProgBase.addindconstr!, ind.binvar.col, ind.binvalue, indices, coeffs, ind.linconstraint.lb, ind.linconstraint.ub)
-            MathProgBase.addindconstr!(ind.binvar.col, ind.binvalue, indices, coeffs, ind.linconstraint.lb, ind.linconstraint.ub)
-        else
+        indices, coeffs = merge_duplicates(Cint, ind.linconstraint.terms, m.indexedVector, m)
+        try
+            MathProgBase.addindconstr!(m.internalModel, ind.binvar.col, ind.binvalue, indices, coeffs, ind.linconstraint.lb, ind.linconstraint.ub)
+        catch err
             error("Solver does not support indicator constraints")
         end
     end

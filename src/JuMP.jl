@@ -48,6 +48,7 @@ export
     @SOCConstraint, @SOCConstraints,
     @expression, @expressions, @NLexpression, @NLexpressions,
     @variable, @variables, @constraint, @constraints,
+    @indicatorconstraint,
     @NLconstraint, @NLconstraints,
     @SDconstraint, @SDconstraints,
     @objective, @NLobjective,
